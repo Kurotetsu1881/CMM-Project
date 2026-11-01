@@ -6,7 +6,9 @@
 (async () => {
   // ===== AYARLAR =====
   const CHAPTERS = 'ALL';    // örn. ['25','21'] ya da tümü için 'ALL'. Önce ['25'] ile deneyin.
-  const CONCURRENCY = 5;      // aynı anda kaç istek (3-8 arası uygundur; sunucu zorlanırsa kod kendisi yavaşlar)
+  const MAX_CONC = 24;        // otomatik hızlanmanın üst sınırı (kod sunucu sorunsuzsa 2'şer artırır, hata görürse yarıya indirir)
+  const CONCURRENCY = 10;     // aynı anda kaç istek (3-8 arası uygundur; sunucu zorlanırsa kod kendisi yavaşlar)
+  const SKIP_STD = true;      // true: standart bağlantı elemanlarını (NAS/MS/AN/ABS... cıvata, somun, pul) CMM sorgusundan çıkarır; bunların CMM'i olmaz, süreyi ciddi azaltır
   const FETCH_CMM = true;     // true: her parça için Numerical Index'ten CMM bilgisini de alır (parça başına 2 istek)
   const TYPE_OVERRIDE = '';   // boş: tip adresten okunur (A330, A32x ailesi 'A320'). Elle: örn. 'A330'
   const RESUME = true;        // true: yarım kalan tarama aynı revizyonsa kaldığı yerden devam eder
@@ -92,14 +94,14 @@
 
   // ---- devam etme için küçük IndexedDB deposu ----
   const IDB = {
-    open: () => new Promise((res, rej) => { const r = indexedDB.open('ipcscan', 1);
-      r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }),
+    open() { return this._d || (this._d = new Promise((res, rej) => { const r = indexedDB.open('ipcscan', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => res(r.result); r.onerror = () => { this._d = null; rej(r.error); }; })); },
     async set(k, v) { try { const d = await this.open(); await new Promise(res => { const t = d.transaction('kv', 'readwrite'); t.objectStore('kv').put(v, k); t.oncomplete = res; t.onerror = res; }); } catch (e) {} },
     async all(prefix) { const out = new Map(); try { const d = await this.open();
-      await new Promise(res => { const q = d.transaction('kv').objectStore('kv').openCursor(IDBKeyRange.bound(prefix, prefix + '￿'));
+      await new Promise(res => { const q = d.transaction('kv').objectStore('kv').openCursor(IDBKeyRange.bound(prefix, prefix + ' '));
         q.onsuccess = () => { const c = q.result; if (c) { out.set(c.key, c.value); c.continue(); } else res(); }; q.onerror = () => res(); }); } catch (e) {} return out; },
     async clear(prefix) { try { const d = await this.open(); await new Promise(res => { const t = d.transaction('kv', 'readwrite'); const s = t.objectStore('kv');
-      const q = s.openCursor(IDBKeyRange.bound(prefix, prefix + '￿')); q.onsuccess = () => { const c = q.result; if (c) { s.delete(c.key); c.continue(); } }; t.oncomplete = res; t.onerror = res; }); } catch (e) {} }
+      const q = s.openCursor(IDBKeyRange.bound(prefix, prefix + ' ')); q.onsuccess = () => { const c = q.result; if (c) { s.delete(c.key); c.continue(); } }; t.oncomplete = res; t.onerror = res; }); } catch (e) {} }
   };
   const KEY = `ipc|${PREFIX}|${revNum}|`;
   if (!RESUME) await IDB.clear('ipc|');
@@ -107,7 +109,7 @@
   if (cache.size) console.log(`Önceki taramadan ${cache.size} kayıt hazır, tekrar indirilmeyecek.`);
 
   // ---- istek katmanı: 404 -> {notFound}; 429/5xx/ağ hatası -> bekleyip yeniden dener ----
-  let nReq = 0, nErr = 0, pauseUntil = 0, lastSlow = 0, consecFail = 0;
+  let nReq = 0, nErr = 0, pauseUntil = 0, lastSlow = 0, consecFail = 0, limit = CONCURRENCY, lastDown = 0, errMark = 0;
   window.__stop = false;
   const call = async (method, url, body) => {
     for (let k = 0; k < 5; k++) {
@@ -121,7 +123,7 @@
         if (r.status === 404) { consecFail = 0; return {notFound: true}; }
         if (r.status === 429 || r.status >= 500) {
           const ra = +r.headers.get('retry-after') || 0;
-          if (Date.now() - lastSlow > 3000) { lastSlow = Date.now(); pauseUntil = Math.max(pauseUntil, Date.now() + Math.max(ra * 1000, 1500)); }
+          if (Date.now() - lastSlow > 3000) { lastSlow = Date.now(); lastDown = lastSlow; limit = Math.max(4, Math.floor(limit / 2)); pauseUntil = Math.max(pauseUntil, Date.now() + Math.max(ra * 1000, 1500)); }
           throw new Error(r.status);
         }
         if (!r.ok) throw new Error(r.status);
@@ -134,14 +136,22 @@
   };
   const runPool = async (items, fn) => {
     let i = 0;
-    const worker = async () => { while (!window.__stop) { const k = i++; if (k >= items.length) return; await fn(items[k], k); report(); } };
-    await Promise.all(Array.from({length: CONCURRENCY}, worker));
+    const worker = async id => {
+      while (!window.__stop) {
+        if (i >= items.length) return;
+        if (id >= limit) { await sleep(250); continue; }
+        const k = i++; if (k >= items.length) return;
+        await fn(items[k], k); report();
+      }
+    };
+    await Promise.all(Array.from({length: MAX_CONC}, (_, id) => worker(id)));
   };
   let lastLog = 0, phase = '', total = 0, done = 0;
   const t0 = Date.now();
   const report = () => {
     if (Date.now() - lastLog < 5000) return; lastLog = Date.now();
-    console.log(`${phase}: ${done}/${total} · istek ${nReq} (${(nReq / ((Date.now() - t0) / 1000)).toFixed(1)}/sn) · hata ${nErr}`);
+    if (nErr === errMark && Date.now() - lastDown > 10000 && limit < MAX_CONC) limit = Math.min(MAX_CONC, limit + 2); errMark = nErr;
+    console.log(`${phase}: ${done}/${total} · istek ${nReq} (${(nReq / ((Date.now() - t0) / 1000)).toFixed(1)}/sn) · hata ${nErr} · paralel ${limit}`);
   };
 
   // ---- 1) Filo (kuyruk -> FSN/MSN/motor) ----
@@ -221,8 +231,11 @@
     const keys = new Set();
     rowsOf.forEach(rows => rows.forEach(r => { if (r.pn) keys.add(r.pn + '|' + r.vendor); }));
     const todo = [];
-    keys.forEach(k => { const c = cache.get(KEY + 'cmm|' + k); if (c) cmmOf.set(k, c); else todo.push(k); });
-    phase = 'CMM'; total = keys.size; done = keys.size - todo.length;
+    const STD = /^(ABS|NAS|MS|AN|EN|LN|NSA|DIN|ISO|BACB|BACN|BACS|BACW|BACR|BACC|ASNA|ESNA|HST|TAN|SPS)\d/i;
+    let nStd = 0;
+    keys.forEach(k => { const c = cache.get(KEY + 'cmm|' + k); if (c) cmmOf.set(k, c); else if (SKIP_STD && STD.test(k.split('|')[0])) nStd++; else todo.push(k); });
+    if (nStd) console.log(`${nStd} standart bağlantı elemanı CMM sorgusundan çıkarıldı.`);
+    phase = 'CMM'; total = keys.size - nStd; done = total - todo.length;
     console.log(`${keys.size} farklı parça, ${todo.length} tanesi için CMM sorgulanacak...`);
     const pick = (results, pn, vendor) => {
       const cirs = (results || []).filter(x => x.contentType === 'CIR' && x.cirId && /PNRDATA/i.test(x.type || ''));
