@@ -186,9 +186,6 @@
                 <select id="chSel" class="fld" aria-label="Chapter"></select>
                 <select id="secSel" class="fld" aria-label="Bölüm"></select>
                 <input type="text" id="kwInput" class="fld" placeholder="Bu listede ara (P/N, lokasyon...)" autocomplete="off" spellcheck="false" aria-label="Listede ara" style="flex: 1 1 180px; max-width: 320px;">
-                <label class="flex items-center gap-2 text-xs sm:text-sm text-gray-200 cursor-pointer select-none">
-                    <input type="checkbox" id="cmmOnly" checked style="width: 18px; height: 18px; accent-color: #ef4444;"> Sadece CMM'i olanlar
-                </label>
                 <span class="text-xs sm:text-sm text-gray-300 ml-auto" aria-live="polite"><strong id="resultCount" class="text-red-400 text-base">0</strong> sonuç</span>
             </div>
             <div id="tableContainer" class="table-wrap flex-grow flex flex-col min-h-0 rounded-2xl shadow-xl overflow-hidden">
@@ -355,19 +352,19 @@
                 seen.set(key, o); out.push(o);
             }
             out.sort((x, y) => x.fig.ref.localeCompare(y.fig.ref, 'en', { numeric: true }) || x.item.localeCompare(y.item, 'en', { numeric: true }));
-            S.base = out;
+            S.base = out.filter(o => o.cmm.length);   // yalnızca CMM'i olan parçalar listelenir
         }
 
         // ---------- 2) Chapter seçimi ----------
         function showChapters() {
             const m = S.ac.ds.meta, per = {};
             S.base.forEach(o => { const c = per[o.ch] || (per[o.ch] = { p: new Set(), c: new Set() }); const k = o.pn + '|' + o.vendor; c.p.add(k); if (o.cmm.length) c.c.add(k); });
-            $('chapterHint').textContent = S.ac.reg + ' için ' + tr(S.base.length) + ' kayıt bulundu. Taranan chapter\'lar listeleniyor.';
+            $('chapterHint').textContent = S.ac.reg + ' için CMM bilgisi olan ' + tr(S.base.length) + ' parça bulundu.';
             const allBtn = '<button type="button" class="ch-card" data-ch="*"><span class="ch-no">*</span><span class="ch-name">Tüm chapter\'larda ara</span><span class="ch-meta">' + tr(S.base.length) + ' kayıt</span></button>';
-            $('chapterGrid').innerHTML = allBtn + m.chapters.map(c => {
+            $('chapterGrid').innerHTML = allBtn + m.chapters.filter(c => per[c.ch]).map(c => {
                 const p = per[c.ch], n = p ? p.p.size : 0, k = p ? p.c.size : 0;
                 return '<button type="button" class="ch-card" data-ch="' + esc(c.ch) + '"' + (n ? '' : ' disabled') + '><span class="ch-no">' + esc(c.ch) + '</span><span class="ch-name">' +
-                    esc(chName(c.title)) + '</span><span class="ch-meta">' + (n ? '<b>' + tr(k) + '</b> CMM\'li · ' + tr(n) + ' parça' : 'Bu uçak için kayıt yok') + '</span></button>';
+                    esc(chName(c.title)) + '</span><span class="ch-meta">' + tr(n) + ' parça' + '</span></button>';
             }).join('');
             $('resultView').hidden = true; $('chapterView').hidden = false;
             $('chapterView').scrollTop = 0;
@@ -388,7 +385,6 @@
             $('chSel').value = S.ch;
             fillSections();
             if (!keepKw) $('kwInput').value = '';
-            $('cmmOnly').checked = true;
             $('chapterView').hidden = true; $('resultView').hidden = false;
             applyFilters();
             if (!keepUrl) syncUrl();
@@ -396,8 +392,8 @@
 
         // ---------- 3) Sonuç listesi ----------
         function applyFilters() {
-            const sec = $('secSel').value, cmmOnly = $('cmmOnly').checked, terms = norm($('kwInput').value).split(/\s+/).filter(Boolean);
-            S.filtered = S.base.filter(o => (!S.ch || o.ch === S.ch) && (!sec || o.sec === sec) && (!cmmOnly || o.cmm.length) && terms.every(t => o.search.includes(t)));
+            const sec = $('secSel').value, terms = norm($('kwInput').value).split(/\s+/).filter(Boolean);
+            S.filtered = S.base.filter(o => (!S.ch || o.ch === S.ch) && (!sec || o.sec === sec) && terms.every(t => o.search.includes(t)));
             $('resultCount').textContent = tr(S.filtered.length);
             S.shown = 0; $('tableBody').innerHTML = '';
             renderMore(true);
@@ -436,10 +432,7 @@
             const empty = !S.filtered.length;
             $('emptyState').hidden = !empty;
             if (empty) {
-                const hidden = S.base.filter(o => (!S.ch || o.ch === S.ch) && !o.cmm.length).length;
-                $('emptyState').textContent = $('cmmOnly').checked && hidden
-                    ? 'Bu filtrelerle sonuç yok. "Sadece CMM\'i olanlar" kutusunu kaldırırsanız ' + tr(hidden) + ' CMM\'siz parça da görünür.'
-                    : 'Bu filtrelerle sonuç bulunamadı.';
+                $('emptyState').textContent = 'Bu filtrelerle sonuç bulunamadı.';
             }
             if (first) $('bodyScroll').scrollTop = 0;
         }
@@ -479,7 +472,6 @@
         $('backBtn').addEventListener('click', () => { S.ch = null; showChapters(); syncUrl(); });
         $('secSel').addEventListener('change', applyFilters);
         $('chSel').addEventListener('change', () => { S.ch = $('chSel').value; fillSections(); applyFilters(); syncUrl(); });
-        $('cmmOnly').addEventListener('change', applyFilters);
         let kwT; $('kwInput').addEventListener('input', () => { clearTimeout(kwT); kwT = setTimeout(applyFilters, 120); });
         $('moreBtn').addEventListener('click', () => renderMore(false));
 
