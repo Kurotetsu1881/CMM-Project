@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; form-action 'none'; base-uri 'none'">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="robots" content="noindex, nofollow">
+    <meta name="referrer" content="no-referrer">
+    <meta name="description" content="CMM Finder IPC: kuyruk koduna göre chapter, lokasyon, P/N, vendor code ve CMM arama ekranı.">
+    <meta name="theme-color" content="#030712">
+    <title>CMM Finder · IPC</title>
+    <link rel="icon" href="icons/favicon.svg" type="image/svg+xml">
+    <link rel="icon" href="icons/favicon-32.png" type="image/png" sizes="32x32">
+    <link rel="shortcut icon" href="favicon.ico">
+    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+    <link rel="manifest" href="manifest.webmanifest">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transparent; height: 100vh; height: 100dvh; }
+        [hidden] { display: none !important; }
+
+        .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+        .brand-logo { width: 40px; height: 40px; flex: 0 0 auto; border-radius: 10px; box-shadow: 0 2px 10px rgba(239, 68, 68, 0.25); }
+        .hero-logo { width: 88px; height: 88px; margin: 0 auto 14px; display: block; border-radius: 20px; box-shadow: 0 6px 24px rgba(239, 68, 68, 0.3); }
+        .brand-sub { display: none; font-size: 12px; color: #9ca3af; font-weight: 500; letter-spacing: 0.02em; }
+        @media (min-width: 640px) {
+            .brand-logo { width: 48px; height: 48px; border-radius: 12px; }
+            .hero-logo { width: 112px; height: 112px; border-radius: 26px; }
+            .brand-sub { display: block; }
+        }
+
+        .glass { background: rgba(17, 24, 39, 0.75); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
+
+        .search-box {
+            width: 100%; height: 48px; padding: 0 44px 0 16px; font-size: 16px; letter-spacing: 0.04em;
+            color: #ffffff; -webkit-text-fill-color: #ffffff; text-transform: uppercase;
+            background: rgba(3, 7, 18, 0.7); border: 1px solid rgba(148, 163, 184, 0.4); border-radius: 12px;
+        }
+        .search-box::placeholder { color: #9ca3af; text-transform: none; letter-spacing: 0; -webkit-text-fill-color: #9ca3af; }
+        .search-box:focus { outline: none; border-color: #ef4444; }
+        .fld {
+            height: 40px; padding: 0 12px; font-size: 14px; color: #f1f5f9; background: rgba(3, 7, 18, 0.7);
+            border: 1px solid rgba(148, 163, 184, 0.4); border-radius: 10px; min-width: 0;
+        }
+        .fld:focus { outline: none; border-color: #ef4444; }
+        select.fld { max-width: 100%; }
+        #inputWrap { position: relative; width: 100%; }
+        #clearBtn { position: absolute; right: 2px; top: 2px; width: 44px; height: 44px; font-size: 26px; line-height: 1; color: #cbd5e1; background: transparent; border: 0; cursor: pointer; }
+        #clearBtn:hover { color: #ffffff; }
+
+        #searchSection.hero { flex: 1 1 auto; display: flex; align-items: center; justify-content: center; min-height: 0; overflow-y: auto; }
+        #searchSection.hero #searchPanel { width: 100%; max-width: 720px; padding: 32px 20px; border-radius: 20px; text-align: center; border: 1px solid rgba(148, 163, 184, 0.28); }
+        #searchSection.hero #inputWrap { max-width: 600px; margin: 20px auto 0; }
+        #searchSection.hero .search-box { height: 56px; font-size: 19px; border: 2px solid #ef4444; border-radius: 14px; }
+        #searchSection:not(.hero) { flex: 0 0 auto; margin-bottom: 10px; }
+        #searchSection:not(.hero) #searchPanel { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 10px 14px; border-radius: 14px; border: 1px solid rgba(55, 65, 81, 0.5); }
+        #searchSection:not(.hero) #inputWrap { max-width: 280px; }
+        #searchSection:not(.hero) .search-box { height: 42px; }
+
+        .chip {
+            display: inline-flex; align-items: center; min-height: 36px; padding: 0 14px; font-size: 13px; font-weight: 600; color: #e5e7eb;
+            background: rgba(8, 20, 40, 0.7); border: 1px solid rgba(148, 163, 184, 0.4); border-radius: 9999px; cursor: pointer;
+        }
+        .chip:hover, .chip:focus { border-color: #ef4444; outline: none; }
+        .chip small { font-weight: 500; color: #9ca3af; margin-left: 8px; font-size: 11px; }
+        .info-chip { display: inline-flex; align-items: baseline; gap: 6px; font-size: 12px; color: #9ca3af; }
+        .info-chip b { color: #f1f5f9; font-size: 14px; font-weight: 600; }
+
+        .btn-ghost {
+            display: inline-flex; align-items: center; justify-content: center; min-height: 40px; padding: 0 14px; font-size: 13px; font-weight: 600; color: #f1f5f9; text-decoration: none;
+            background: rgba(8, 20, 40, 0.6); border: 1px solid rgba(148, 163, 184, 0.4); border-radius: 10px; cursor: pointer; white-space: nowrap;
+        }
+        .btn-ghost:hover { border-color: #ef4444; }
+
+        /* Chapter kartları */
+        #chapterGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+        .ch-card {
+            display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 14px 16px; text-align: left; cursor: pointer; color: #e5e7eb;
+            background: rgba(17, 24, 39, 0.75); border: 1px solid rgba(55, 65, 81, 0.6); border-radius: 14px;
+            -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+        }
+        .ch-card:hover, .ch-card:focus { border-color: #ef4444; outline: none; }
+        .ch-card[disabled] { opacity: 0.4; cursor: default; border-color: rgba(55, 65, 81, 0.6); }
+        .ch-no { font-size: 28px; font-weight: 700; color: #ef4444; line-height: 1; }
+        .ch-name { font-size: 13px; font-weight: 600; letter-spacing: 0.02em; }
+        .ch-meta { font-size: 12px; color: #9ca3af; }
+        .ch-meta b { color: #fca5a5; font-weight: 600; }
+
+        .table-wrap { border: 1px solid rgba(55, 65, 81, 0.5); }
+        .head-bar { background: rgba(17, 24, 39, 0.85); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); border-bottom: 2px solid rgba(239, 68, 68, 0.6); color: #e5e7eb; }
+        .body-scroll { background: rgba(3, 7, 18, 0.82); }
+        .icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 38px; height: 38px; margin: -6px 0; color: #9ca3af; background: none; border: 0; cursor: pointer; vertical-align: middle; }
+        .icon-btn:hover { color: #f87171; }
+        .edit-txt { display: none; }
+        .loc-main { color: #f1f5f9; font-weight: 500; }
+        .loc-sub { display: block; margin-top: 2px; font-size: 11px; color: #9ca3af; line-height: 1.35; }
+        .loc-sub a { color: #9ca3af; text-decoration: underline; text-decoration-style: dotted; }
+        .loc-sub a:hover { color: #fca5a5; }
+        .pn { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #f1f5f9; word-break: break-all; }
+        .fin { display: block; margin-top: 2px; font-size: 11px; color: #9ca3af; }
+        .cmm-link { color: #f87171; text-decoration: underline; font-weight: 600; white-space: nowrap; }
+        .cmm-link:hover { color: #fca5a5; }
+        .no-cmm { color: #6b7280; }
+        .tag { display: inline-block; margin-left: 6px; padding: 0 6px; font-size: 10px; font-weight: 600; color: #9ca3af; border: 1px solid rgba(148, 163, 184, 0.3); border-radius: 6px; vertical-align: middle; }
+
+        @media (max-width: 640px) {
+            #headWrap { display: none; }
+            #dataTable, #dataTable tbody, #dataTable tr, #dataTable td { display: block; width: 100%; }
+            #dataTable tr { padding: 12px; margin-bottom: 8px; background: rgba(17, 24, 39, 0.5); border-radius: 12px; border: 1px solid rgba(55, 65, 81, 0.4); }
+            #dataTable td { padding: 4px 0 !important; white-space: normal !important; overflow: visible !important; border: none !important; }
+            #dataTable td::before { content: attr(data-label); display: inline-block; min-width: 90px; color: #9ca3af; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; vertical-align: top; }
+            #dataTable td.cell-loc > span.wrap { display: inline-block; max-width: calc(100% - 96px); vertical-align: top; }
+            #dataTable td.cell-act { display: flex; justify-content: flex-end; margin-top: 6px; padding-top: 8px !important; border-top: 1px solid rgba(55, 65, 81, 0.4) !important; }
+            #dataTable td.cell-act::before { display: none; }
+            .edit-link { width: 100% !important; justify-content: center; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.3); }
+            .edit-txt { display: inline; margin-left: 6px; font-size: 13px; color: #fca5a5; }
+            #searchSection.hero #searchPanel { padding: 20px 14px; }
+            #searchSection:not(.hero) #inputWrap { max-width: 100%; }
+            #chapterGrid { grid-template-columns: 1fr 1fr; }
+            .ch-card { padding: 12px; }
+            .ch-no { font-size: 24px; }
+            #toolbar .fld { flex: 1 1 100%; }
+        }
+    </style>
+</head>
+<body class="bg-gray-900 bg-cover bg-center bg-no-repeat bg-fixed text-gray-100 p-2 sm:p-5 flex flex-col overflow-hidden" style="background-image: url('background.jpg');">
+    <div class="max-w-7xl mx-auto w-full flex flex-col h-full overflow-hidden">
+
+        <!-- Üst Bar -->
+        <div class="glass flex-shrink-0 flex items-center justify-between gap-3 mb-2.5 p-3.5 sm:p-4 rounded-2xl shadow-xl border border-gray-700 border-opacity-50">
+            <div class="brand">
+                <img src="icons/logo.svg" alt="CMM Finder logosu" class="brand-logo" width="48" height="48">
+                <div class="min-w-0">
+                    <h1 class="text-lg sm:text-2xl font-bold text-red-500 tracking-wide leading-tight truncate">CMM Erişim Ekranı</h1>
+                    <span class="brand-sub">IPC verisiyle · kuyruk koduna göre chapter ve parça arama</span>
+                </div>
+            </div>
+            <div class="flex items-center gap-2 flex-shrink-0">
+                <a href="index.html" class="btn-ghost hidden sm:inline-flex">Eski arama</a>
+                <a href="bilgi-ekle.html" class="btn-ghost">Bilgi ekle / düzelt</a>
+            </div>
+        </div>
+
+        <!-- 1) Kuyruk kodu -->
+        <div id="searchSection" class="hero">
+            <div id="searchPanel" class="glass">
+                <div id="heroText">
+                    <img src="icons/logo.svg" alt="" class="hero-logo" width="112" height="112">
+                    <h2 class="text-xl sm:text-3xl font-bold">Uçağın kuyruk kodunu yazın</h2>
+                    <p class="mt-1.5 text-gray-300 text-xs sm:text-base">Önce chapter seçilir, sonra lokasyon, P/N, vendor code ve CMM numarası listelenir.</p>
+                </div>
+                <div id="inputWrap">
+                    <input type="text" id="searchInput" class="search-box" placeholder="Örn. TC-LOH" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="Kuyruk kodu" enterkeyhint="go">
+                    <button type="button" id="clearBtn" aria-label="Temizle" hidden>&times;</button>
+                </div>
+                <div id="suggest" class="mt-3 flex flex-wrap justify-center gap-1.5" hidden></div>
+                <p id="status" class="mt-2.5 text-xs sm:text-sm text-gray-300" aria-live="polite">Veriler yükleniyor...</p>
+                <div id="recent" class="mt-4 flex flex-wrap items-center justify-center gap-1.5" hidden>
+                    <span class="text-xs text-gray-400 mr-1">Son aranan:</span>
+                    <span id="recentChips" class="flex flex-wrap justify-center gap-1.5"></span>
+                </div>
+                <div id="acBar" class="flex flex-wrap items-center gap-x-5 gap-y-1" hidden></div>
+            </div>
+        </div>
+
+        <!-- Hata -->
+        <div id="errorMessage" class="flex-shrink-0 bg-red-900 bg-opacity-85 border border-red-500 text-red-200 px-4 py-3 rounded-xl flex items-center shadow-lg mb-3" role="alert" hidden>
+            <span id="errorText"></span>
+        </div>
+
+        <!-- 2) Chapter seçimi -->
+        <div id="chapterView" class="flex-grow min-h-0 overflow-y-auto" hidden>
+            <div class="glass rounded-2xl border border-gray-700 border-opacity-50 p-3 sm:p-4">
+                <h2 class="text-base sm:text-lg font-bold mb-0.5">Chapter seçin</h2>
+                <p id="chapterHint" class="text-xs sm:text-sm text-gray-400 mb-3"></p>
+                <div id="chapterGrid"></div>
+            </div>
+        </div>
+
+        <!-- 3) Sonuçlar -->
+        <div id="resultView" class="flex-grow flex flex-col min-h-0" hidden>
+            <div id="toolbar" class="glass flex-shrink-0 flex flex-wrap items-center gap-2 mb-2.5 p-2.5 sm:p-3 rounded-2xl border border-gray-700 border-opacity-50">
+                <button type="button" id="backBtn" class="btn-ghost">&larr; Chapter'lar</button>
+                <strong id="chTitle" class="text-sm sm:text-base text-red-400 mr-1"></strong>
+                <select id="chSel" class="fld" aria-label="Chapter"></select>
+                <select id="secSel" class="fld" aria-label="Bölüm"></select>
+                <input type="text" id="kwInput" class="fld" placeholder="Bu listede ara (P/N, lokasyon...)" autocomplete="off" spellcheck="false" aria-label="Listede ara" style="flex: 1 1 180px; max-width: 320px;">
+                <label class="flex items-center gap-2 text-xs sm:text-sm text-gray-200 cursor-pointer select-none">
+                    <input type="checkbox" id="cmmOnly" checked style="width: 18px; height: 18px; accent-color: #ef4444;"> Sadece CMM'i olanlar
+                </label>
+                <span class="text-xs sm:text-sm text-gray-300 ml-auto" aria-live="polite"><strong id="resultCount" class="text-red-400 text-base">0</strong> sonuç</span>
+            </div>
+            <div id="tableContainer" class="table-wrap flex-grow flex flex-col min-h-0 rounded-2xl shadow-xl overflow-hidden">
+                <div id="headWrap" class="head-bar flex-shrink-0">
+                    <table class="w-full text-left border-collapse table-fixed">
+                        <colgroup><col style="width: 36%"><col style="width: 22%"><col style="width: 13%"><col style="width: 21%"><col style="width: 70px"></colgroup>
+                        <thead class="text-xs uppercase tracking-wider"><tr>
+                            <th class="px-3 py-3.5 font-semibold">Lokasyon</th><th class="px-3 py-3.5 font-semibold">Parça numarası</th>
+                            <th class="px-3 py-3.5 font-semibold">Vendor code</th><th class="px-3 py-3.5 font-semibold">CMM</th><th class="px-2 py-3.5 text-center font-semibold">İşlem</th>
+                        </tr></thead>
+                    </table>
+                </div>
+                <div id="bodyScroll" class="body-scroll overflow-y-auto flex-grow min-h-0">
+                    <table id="dataTable" class="w-full text-left border-collapse table-fixed">
+                        <colgroup><col style="width: 36%"><col style="width: 22%"><col style="width: 13%"><col style="width: 21%"><col style="width: 70px"></colgroup>
+                        <tbody id="tableBody" class="divide-y divide-gray-700 divide-opacity-30 text-xs sm:text-sm text-gray-300"></tbody>
+                    </table>
+                    <div id="moreWrap" class="p-3 text-center" hidden><button type="button" id="moreBtn" class="btn-ghost"></button></div>
+                    <p id="emptyState" class="p-6 text-center text-gray-400 text-sm" hidden></p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Alt Bilgi -->
+        <div class="flex-shrink-0 mt-2 text-xs text-gray-400 px-2 flex justify-between items-center gap-3">
+            <span id="footInfo" class="truncate">IPC verisi yükleniyor...</span>
+            <span class="flex-shrink-0">CMM Finder IPC v1.0</span>
+        </div>
+    </div>
+
+    <script>
+        const IPC_FILES = ['ipc_A330.json'];          // yeni tipler eklendikçe buraya yazılır (ipc_A320.json, ipc_A350.json ...)
+        const RECENT_KEY = 'cmm_ipc_recent_v1';
+        const REPORT_PAGE = 'bilgi-ekle.html';
+        const CMM_LINK = 'https://ttdocs.thyteknik.com/documents/?q:document_chapter:icontains=';
+        const PAGE = 200;
+        const EDIT_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>';
+
+        const $ = id => document.getElementById(id);
+        const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        const nk = s => String(s).toUpperCase().replace(/[^A-Z0-9]/g, '');
+        const norm = s => String(s).replace(/İ/g, 'I').replace(/ı/g, 'I').toUpperCase();
+        const lsGet = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+        const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
+        const tr = n => Number(n).toLocaleString('tr-TR');
+
+        const S = { sets: [], aircraft: [], ac: null, ch: null, base: [], filtered: [], shown: 0, recent: [], loaded: false };
+
+        // "0-2,5,7-8" aralık metninde i var mı?
+        function inSet(str, i) {
+            if (str === '*') return true;
+            if (!str) return false;
+            for (const p of str.split(',')) {
+                const k = p.indexOf('-');
+                const lo = +(k < 0 ? p : p.slice(0, k)), hi = k < 0 ? lo : +p.slice(k + 1);
+                if (i >= lo && i <= hi) return true;
+            }
+            return false;
+        }
+        const fmtCmm = n => /^\d{6}$/.test(n) ? n.slice(0, 2) + '-' + n.slice(2, 4) + '-' + n.slice(4) : n;
+        const chName = t => String(t).replace(/^\S+\s+-\s+/, '');
+
+        // ---------- Veri yükleme ----------
+        async function loadAll() {
+            const res = await Promise.all(IPC_FILES.map(async f => {
+                try { const r = await fetch(f, { cache: 'no-cache' }); if (!r.ok) throw new Error(r.status); return { f, d: await r.json() }; }
+                catch (e) { return { f, err: String(e.message || e) }; }
+            }));
+            const bad = res.filter(x => x.err);
+            res.filter(x => !x.err).forEach(x => {
+                const d = x.d, ds = { file: x.f, meta: d.meta, fleet: d.fleet, figs: d.figs, rows: d.rows, cmmSup: d.cmmSup || {} };
+                S.sets.push(ds);
+                d.fleet.forEach((a, i) => S.aircraft.push({ reg: a.reg, key: nk(a.reg), fsn: a.fsn, msn: a.msn, eng: a.eng, ds, idx: i }));
+            });
+            if (!S.sets.length) {
+                $('status').textContent = 'Veriler yüklenemedi.';
+                $('errorText').textContent = 'IPC veri dosyası bulunamadı (' + bad.map(b => b.f).join(', ') + '). Dosya bu sayfayla aynı klasörde olmalı.';
+                $('errorMessage').hidden = false;
+                $('footInfo').textContent = 'IPC verisi yok';
+                return;
+            }
+            if (bad.length) { $('errorText').textContent = 'Bazı veri dosyaları yüklenemedi: ' + bad.map(b => b.f).join(', '); $('errorMessage').hidden = false; }
+            S.loaded = true;
+            S.aircraft.sort((a, b) => a.reg.localeCompare(b.reg));
+            $('status').textContent = tr(S.aircraft.length) + ' uçak hazır';
+            $('footInfo').textContent = S.sets.map(s => s.meta.type + ' IPC · REV ' + s.meta.revNum + ' · ' + s.meta.revDate + ' · ' + tr(s.meta.counts.parts) + ' parça').join('   |   ');
+            loadRecent(); renderRecent();
+            applyUrl();
+            suggest();
+        }
+
+        // ---------- 1) Kuyruk kodu ----------
+        function findMatches(q) {
+            const k = nk(q);
+            if (k.length < 2) return [];
+            const kk = k.startsWith('TC') ? k : 'TC' + k;
+            const hits = S.aircraft.filter(a => a.key.includes(k) || a.key.includes(kk));
+            hits.sort((a, b) => (b.key.startsWith(kk) || b.key.startsWith(k)) - (a.key.startsWith(kk) || a.key.startsWith(k)) || a.reg.localeCompare(b.reg));
+            return hits;
+        }
+        function suggest() {
+            const input = $('searchInput');
+            $('clearBtn').hidden = !input.value;
+            const box = $('suggest');
+            if (!S.loaded || S.ac) { box.hidden = true; return; }
+            const k = nk(input.value);
+            const hits = findMatches(input.value);
+            if (hits.length === 1 || (hits.length && hits.some(a => a.key === k || a.key === 'TC' + k) && k.length >= 4)) {
+                const exact = hits.find(a => a.key === k || a.key === 'TC' + k) || hits[0];
+                if (exact.key === k || exact.key === 'TC' + k) { selectAc(exact); return; }
+            }
+            if (k.length >= 2 && !hits.length) { $('status').textContent = '"' + input.value.trim().toUpperCase() + '" filoda bulunamadı.'; box.hidden = true; return; }
+            $('status').textContent = S.aircraft.length + ' uçak hazır';
+            box.innerHTML = hits.slice(0, 10).map(a => '<button type="button" class="chip" data-reg="' + esc(a.reg) + '">' + esc(a.reg) + '<small>' + esc(a.ds.meta.type) + ' · FSN ' + esc(a.fsn || '-') + '</small></button>').join('');
+            box.hidden = !hits.length;
+        }
+        function selectAc(a, keepCh) {
+            S.ac = a; S.ch = null;
+            $('searchInput').value = a.reg; $('suggest').hidden = true;
+            saveRecent(a.reg);
+            $('searchSection').classList.remove('hero');
+            $('heroText').hidden = true; $('status').hidden = true; $('recent').hidden = true;
+            const m = a.ds.meta;
+            $('acBar').innerHTML =
+                '<span class="info-chip">Tip <b>' + esc(m.type) + '</b></span><span class="info-chip">FSN <b>' + esc(a.fsn || '-') + '</b></span>' +
+                '<span class="info-chip">MSN <b>' + esc(a.msn || '-') + '</b></span><span class="info-chip">Motor <b>' + esc(a.eng || '-') + '</b></span>' +
+                '<span class="info-chip">IPC <b>REV ' + esc(m.revNum) + '</b> · ' + esc(m.revDate) + '</span>';
+            $('acBar').hidden = false;
+            buildBase();
+            showChapters();
+            if (!keepCh) syncUrl();
+        }
+        function resetAc() {
+            S.ac = null; S.ch = null;
+            $('searchInput').value = ''; $('clearBtn').hidden = true;
+            $('searchSection').classList.add('hero');
+            $('heroText').hidden = false; $('status').hidden = false; $('acBar').hidden = true;
+            $('chapterView').hidden = true; $('resultView').hidden = true;
+            loadRecent(); renderRecent(); syncUrl(); suggest();
+            $('searchInput').focus();
+        }
+        function loadRecent() {
+            try { const r = JSON.parse(lsGet(RECENT_KEY) || '[]'); S.recent = Array.isArray(r) ? r.filter(x => typeof x === 'string' && x.length <= 12).slice(0, 4) : []; } catch (e) { S.recent = []; }
+        }
+        function saveRecent(reg) { S.recent = [reg].concat(S.recent.filter(x => x !== reg)).slice(0, 4); lsSet(RECENT_KEY, JSON.stringify(S.recent)); }
+        function renderRecent() {
+            const ok = S.recent.filter(r => S.aircraft.some(a => a.reg === r));
+            $('recentChips').innerHTML = ok.map(r => '<button type="button" class="chip" data-reg="' + esc(r) + '">' + esc(r) + '</button>').join('');
+            $('recent').hidden = !ok.length || !!S.ac;
+        }
+
+        // ---------- Uçağa uygun satırlar ----------
+        function buildBase() {
+            const a = S.ac, ds = a.ds, figOk = ds.figs.map(f => inSet(f.fm, a.idx));
+            const seen = new Map(), out = [];
+            for (const r of ds.rows) {
+                const f = ds.figs[r[0]];
+                if (!figOk[r[0]] || !inSet(r[7] || f.fm, a.idx)) continue;
+                const key = r[2] + '|' + r[3] + '|' + r[4] + '|' + r[5] + '|' + r[8];
+                const hit = seen.get(key);
+                if (hit) { if (hit.refs.length < 6 && !hit.refs.some(x => x.id === f.id)) hit.refs.push(f); hit.n++; continue; }
+                const o = { ch: f.ch, sec: f.ref.slice(0, 5), pn: r[2], vendor: r[3], nom: r[4] || f.name, fin: r[5], cmm: r[8] ? r[8].split(',') : [], refs: [f], fig: f, item: r[1], n: 1 };
+                o.search = norm([o.pn, o.vendor, o.nom, o.fin, o.cmm.map(fmtCmm).join(' '), f.ref, f.name].join(' '));
+                seen.set(key, o); out.push(o);
+            }
+            out.sort((x, y) => x.fig.ref.localeCompare(y.fig.ref, 'en', { numeric: true }) || x.item.localeCompare(y.item, 'en', { numeric: true }));
+            S.base = out;
+        }
+
+        // ---------- 2) Chapter seçimi ----------
+        function showChapters() {
+            const m = S.ac.ds.meta, per = {};
+            S.base.forEach(o => { const c = per[o.ch] || (per[o.ch] = { p: new Set(), c: new Set() }); const k = o.pn + '|' + o.vendor; c.p.add(k); if (o.cmm.length) c.c.add(k); });
+            $('chapterHint').textContent = S.ac.reg + ' için ' + tr(S.base.length) + ' kayıt bulundu. Taranan chapter\'lar listeleniyor.';
+            const allBtn = '<button type="button" class="ch-card" data-ch="*"><span class="ch-no">*</span><span class="ch-name">Tüm chapter\'larda ara</span><span class="ch-meta">' + tr(S.base.length) + ' kayıt</span></button>';
+            $('chapterGrid').innerHTML = allBtn + m.chapters.map(c => {
+                const p = per[c.ch], n = p ? p.p.size : 0, k = p ? p.c.size : 0;
+                return '<button type="button" class="ch-card" data-ch="' + esc(c.ch) + '"' + (n ? '' : ' disabled') + '><span class="ch-no">' + esc(c.ch) + '</span><span class="ch-name">' +
+                    esc(chName(c.title)) + '</span><span class="ch-meta">' + (n ? '<b>' + tr(k) + '</b> CMM\'li · ' + tr(n) + ' parça' : 'Bu uçak için kayıt yok') + '</span></button>';
+            }).join('');
+            $('resultView').hidden = true; $('chapterView').hidden = false;
+            $('chapterView').scrollTop = 0;
+        }
+        function fillSections() {
+            const m = S.ac.ds.meta, secs = new Map();
+            S.base.forEach(o => { if (!S.ch || o.ch === S.ch) secs.set(o.sec, (secs.get(o.sec) || 0) + 1); });
+            $('secSel').innerHTML = '<option value="">Tüm bölümler</option>' + [...secs.keys()].sort().map(s =>
+                '<option value="' + esc(s) + '">' + esc(s + (m.sections[s] ? ' · ' + m.sections[s] : '') + ' (' + secs.get(s) + ')') + '</option>').join('');
+        }
+        function openChapter(ch, keepUrl, keepKw) {
+            S.ch = ch || '';
+            const m = S.ac.ds.meta;
+            $('chTitle').textContent = S.ac.reg;
+            const have = new Set(S.base.map(o => o.ch));
+            $('chSel').innerHTML = '<option value="">Tüm chapter\'lar</option>' + m.chapters.filter(c => have.has(c.ch)).map(c =>
+                '<option value="' + esc(c.ch) + '">' + esc(c.ch + ' · ' + chName(c.title)) + '</option>').join('');
+            $('chSel').value = S.ch;
+            fillSections();
+            if (!keepKw) $('kwInput').value = '';
+            $('cmmOnly').checked = true;
+            $('chapterView').hidden = true; $('resultView').hidden = false;
+            applyFilters();
+            if (!keepUrl) syncUrl();
+        }
+
+        // ---------- 3) Sonuç listesi ----------
+        function applyFilters() {
+            const sec = $('secSel').value, cmmOnly = $('cmmOnly').checked, terms = norm($('kwInput').value).split(/\s+/).filter(Boolean);
+            S.filtered = S.base.filter(o => (!S.ch || o.ch === S.ch) && (!sec || o.sec === sec) && (!cmmOnly || o.cmm.length) && terms.every(t => o.search.includes(t)));
+            $('resultCount').textContent = tr(S.filtered.length);
+            S.shown = 0; $('tableBody').innerHTML = '';
+            renderMore(true);
+        }
+        function reportUrl(o) {
+            const p = new URLSearchParams();
+            p.set('tur', 'Hatalı bilgi'); p.set('tip', S.ac.ds.meta.type); p.set('kuyruk', S.ac.reg);
+            p.set('lokasyon', o.nom); p.set('pn', o.pn); if (o.cmm.length) p.set('cmm', o.cmm.map(fmtCmm).join(', '));
+            return REPORT_PAGE + '?' + p.toString();
+        }
+        function figLink(f) {
+            const t = S.ac.ds.meta.linkTemplate;
+            const a = esc(f.ref);
+            return t ? '<a href="' + esc(t.replace('{ID}', f.id)) + '" target="_blank" rel="noopener noreferrer" title="Airbus IPC\'de aç">FIG ' + a + '</a>' : 'FIG ' + a;
+        }
+        function rowHtml(o) {
+            const f = o.fig, sub = [figLink(f), esc(f.name)];
+            if (f.zones) sub.push('Zone ' + esc(f.zones));
+            const more = o.refs.length > 1 ? ' <span class="tag" title="' + esc(o.refs.map(x => x.ref).join(', ')) + '">+' + (o.refs.length - 1) + ' figür</span>' : '';
+            const cmm = o.cmm.length ? o.cmm.map(n => '<a class="cmm-link" href="' + esc(CMM_LINK + encodeURIComponent(fmtCmm(n))) + '" target="_blank" rel="noopener noreferrer" title="' +
+                esc('Üretici kodu: ' + (S.ac.ds.cmmSup[n] || '-')) + '">' + esc(fmtCmm(n)) + '</a>').join('<br>') : '<span class="no-cmm">-</span>';
+            return '<tr class="hover:bg-gray-800 hover:bg-opacity-40 transition-colors">' +
+                '<td class="px-3.5 py-3 cell-loc align-top" data-label="Lokasyon"><span class="wrap"><span class="loc-main">' + esc(o.nom) + '</span><span class="loc-sub">' + sub.join(' · ') + more + '</span></span></td>' +
+                '<td class="px-3.5 py-3 align-top" data-label="Parça no"><span class="pn">' + esc(o.pn) + '</span>' + (o.fin ? '<span class="fin">FIN ' + esc(o.fin) + '</span>' : '') + '</td>' +
+                '<td class="px-3.5 py-3 align-top" data-label="Vendor">' + esc(o.vendor || '-') + '</td>' +
+                '<td class="px-3.5 py-3 align-top" data-label="CMM">' + cmm + '</td>' +
+                '<td class="px-2 py-3 text-center cell-act align-top"><a href="' + esc(reportUrl(o)) + '" class="icon-btn edit-link" title="Hatalı / eksik bildir" aria-label="Hatalı / eksik bildir">' + EDIT_ICON + '<span class="edit-txt">Hatalı / eksik bildir</span></a></td></tr>';
+        }
+        function renderMore(first) {
+            const next = S.filtered.slice(S.shown, S.shown + PAGE);
+            $('tableBody').insertAdjacentHTML('beforeend', next.map(rowHtml).join(''));
+            S.shown += next.length;
+            const left = S.filtered.length - S.shown;
+            $('moreWrap').hidden = left <= 0;
+            $('moreBtn').textContent = 'Daha fazla göster (' + tr(left) + ' kayıt kaldı)';
+            const empty = !S.filtered.length;
+            $('emptyState').hidden = !empty;
+            if (empty) {
+                const hidden = S.base.filter(o => (!S.ch || o.ch === S.ch) && !o.cmm.length).length;
+                $('emptyState').textContent = $('cmmOnly').checked && hidden
+                    ? 'Bu filtrelerle sonuç yok. "Sadece CMM\'i olanlar" kutusunu kaldırırsanız ' + tr(hidden) + ' CMM\'siz parça da görünür.'
+                    : 'Bu filtrelerle sonuç bulunamadı.';
+            }
+            if (first) $('bodyScroll').scrollTop = 0;
+        }
+
+        // ---------- Adres (paylaşılabilir bağlantı) ----------
+        function syncUrl() {
+            try {
+                const p = new URLSearchParams();
+                if (S.ac) p.set('k', S.ac.reg);
+                if (S.ac && S.ch) p.set('c', S.ch);
+                history.replaceState(null, '', location.pathname + (p.toString() ? '?' + p.toString() : ''));
+            } catch (e) {}
+        }
+        function applyUrl() {
+            const p = new URLSearchParams(location.search), k = p.get('k'), c = p.get('c');
+            if (!k) return;
+            const a = S.aircraft.find(x => x.key === nk(k));
+            if (!a) return;
+            selectAc(a, true);
+            if (c && a.ds.meta.chapters.some(x => x.ch === c)) openChapter(c, true);
+        }
+
+        // ---------- Olaylar ----------
+        $('searchInput').addEventListener('input', suggest);
+        $('searchInput').addEventListener('keydown', e => {
+            if (e.key !== 'Enter' || S.ac) return;
+            const h = findMatches($('searchInput').value); if (h.length) selectAc(h[0]);
+        });
+        $('searchInput').addEventListener('focus', () => { if (S.ac) { resetAc(); } });
+        $('clearBtn').addEventListener('click', () => { if (S.ac) resetAc(); else { $('searchInput').value = ''; suggest(); $('searchInput').focus(); } });
+        document.addEventListener('click', e => {
+            const chip = e.target.closest('[data-reg]');
+            if (chip) { const a = S.aircraft.find(x => x.reg === chip.dataset.reg); if (a) selectAc(a); return; }
+            const card = e.target.closest('.ch-card[data-ch]');
+            if (card && !card.disabled) openChapter(card.dataset.ch === '*' ? '' : card.dataset.ch);
+        });
+        $('backBtn').addEventListener('click', () => { S.ch = null; showChapters(); syncUrl(); });
+        $('secSel').addEventListener('change', applyFilters);
+        $('chSel').addEventListener('change', () => { S.ch = $('chSel').value; fillSections(); applyFilters(); syncUrl(); });
+        $('cmmOnly').addEventListener('change', applyFilters);
+        let kwT; $('kwInput').addEventListener('input', () => { clearTimeout(kwT); kwT = setTimeout(applyFilters, 120); });
+        $('moreBtn').addEventListener('click', () => renderMore(false));
+
+        loadAll();
+    </script>
+</body>
+</html>

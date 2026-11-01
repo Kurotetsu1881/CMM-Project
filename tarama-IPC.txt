@@ -1,0 +1,287 @@
+// ===== IPC TARAMA KODU v1 (Airbus IPC -> ipc_<TİP>.json) · paralel, kaldığı yerden devam eder =====
+// Kullanım: Airbus IPC sayfasında (örn. IPC - A330 - THY) sol ağaçtan HERHANGİ bir figür açın,
+// F12 > Console'a bu kodun tamamını yapıştırıp Enter'a basın. Bittiğinde "ipc_<TİP>.json" dosyası otomatik iner.
+// Kod yalnızca SİZİN oturumunuzda, SİZİN yetkinizle ve sadece okuma istekleri yapar (ağaç, figür içeriği, PNR verisi).
+// Durdurmak için: window.__stop = true   (sonra aynı kodu tekrar çalıştırırsanız kaldığı yerden devam eder)
+(async () => {
+  // ===== AYARLAR =====
+  const CHAPTERS = 'ALL';    // örn. ['25','21'] ya da tümü için 'ALL'. Önce ['25'] ile deneyin.
+  const CONCURRENCY = 5;      // aynı anda kaç istek (3-8 arası uygundur; sunucu zorlanırsa kod kendisi yavaşlar)
+  const FETCH_CMM = true;     // true: her parça için Numerical Index'ten CMM bilgisini de alır (parça başına 2 istek)
+  const TYPE_OVERRIDE = '';   // boş: tip adresten okunur (A330, A32x ailesi 'A320'). Elle: örn. 'A330'
+  const RESUME = true;        // true: yarım kalan tarama aynı revizyonsa kaldığı yerden devam eder
+  const MAX_FIGS = 0;         // 0: sınırsız. DENEME için 30 yazın: yalnızca ilk 30 figürü tarar, dosya ipc_<TİP>_DENEME.json iner
+  // ===================
+
+  //#PARSERS-BEGIN
+  const clean = s => String(s || '').replace(/\s+/g, ' ').trim();
+  const VEND = /^(.*?)\s*\(([^()]+)\)\s*$/;                       // "1021L11D00000 (D2249)" -> parça no + vendor
+  // Figür HTML'inden parça satırları: [{item, pn, vendor, nom, lv, fin, qty, m:[F-kimlikleri]}]
+  const parseFigure = html => {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const out = [];
+    doc.querySelectorAll('table.aipcTable tr[id^="item_"]').forEach(r => {
+      if (!r.cells || r.cells.length < 5) return;                  // boş "id" tekrar satırlarını ele
+      const c = r.cells;
+      const link = c[1].querySelector('adns-link[adns-target-id]');
+      let pn = '', vendor = '';
+      const tid = link ? clean(link.getAttribute('adns-target-id')) : '';
+      if (tid) { const m = VEND.exec(tid); if (m) { pn = m[1]; vendor = m[2]; } else pn = tid; }
+      else pn = clean(c[1].textContent);
+      const nd = c[2].querySelector('div');
+      const raw = clean(nd ? nd.textContent : c[2].textContent);
+      const dots = /^\.+/.exec(raw);
+      const msnAttr = r.getAttribute('msn') || (r.closest('[msn]') ? r.closest('[msn]').getAttribute('msn') : '') || '';
+      out.push({
+        item: r.id.replace(/^item_/, ''), pn, vendor,
+        nom: raw.replace(/^\.+\s*/, ''), lv: dots ? dots[0].length : 0,
+        fin: clean(c[3].textContent), qty: clean(c[4].textContent),
+        m: msnAttr.split(',').map(x => x.trim()).filter(Boolean)
+      });
+    });
+    return out;
+  };
+  // PNR (Numerical Index) HTML'inden CMM listesi: [{n:'250236', s:'D2249'}]
+  const parseCmm = html => {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const out = [], seen = new Set();
+    doc.querySelectorAll('adns-link[adns-target-type="CMM"]').forEach(a => {
+      try {
+        const j = JSON.parse(a.getAttribute('adns-target-revision-metas') || '{}');
+        if (j.number && !seen.has(j.number + '|' + (j.supplier || ''))) { seen.add(j.number + '|' + (j.supplier || '')); out.push({n: String(j.number), s: j.supplier || ''}); }
+      } catch (e) {}
+    });
+    return out;
+  };
+  // "FIG. 25-31-01-71J - GALLEY UNIT INSTL-FWD Zone(s) 220,230 (Apr 01/26)" -> {ref,name,zones,date}
+  const parseFigTitle = title => {
+    let rest = clean(title).replace(/^FIG\.\s*/i, ''), ref = '';
+    const m = /^(\S+)\s+-\s+(.*)$/.exec(rest);
+    if (m) { ref = m[1]; rest = m[2]; }
+    let date = '', zones = '';
+    const dm = /\s*\(([A-Za-z]{3} \d{2}\/\d{2})\)\s*$/.exec(rest); if (dm) { date = dm[1]; rest = rest.slice(0, dm.index); }
+    const zm = /\s+Zone\(s\)\s+(.+)$/.exec(rest); if (zm) { zones = clean(zm[1]); rest = rest.slice(0, zm.index); }
+    return {ref, name: clean(rest), zones, date};
+  };
+  const rangeStr = idx => {                                        // [0,1,2,5] -> "0-2,5"
+    const a = [...new Set(idx)].sort((x, y) => x - y), out = [];
+    for (let i = 0; i < a.length;) { let j = i; while (j + 1 < a.length && a[j + 1] === a[j] + 1) j++; out.push(j > i ? a[i] + '-' + a[j] : '' + a[i]); i = j + 1; }
+    return out.join(',');
+  };
+  //#PARSERS-END
+
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const O = location.origin;
+  const seg = location.pathname.split('/')[1];
+  const PREFIX = (location.pathname.match(/\/document\/([^\/]+)\//) || [])[1];
+  if (!PREFIX) return console.error('IPC sayfasında değilsiniz (adreste /document/<kod>/ yok).');
+  const A = `${O}/${seg}/api`;
+  const wc = new URL(location.href).searchParams.get('wc') || '';
+  if (!/doctype:IPC/i.test(wc)) console.warn('Uyarı: adresteki wc değeri IPC gibi görünmüyor (' + wc + '). Yine de devam ediliyor.');
+  const acs = [...wc.matchAll(/actype:([A-Za-z0-9]+)/gi)].map(m => m[1].toUpperCase());
+  const custo = (/customization:([A-Za-z0-9]+)/i.exec(wc) || [])[1] || 'THY';
+  const autoType = acs.find(t => /^A3(18|19|20|21)$/.test(t)) ? 'A320' : (acs[0] || 'UNKNOWN');
+  const type = (TYPE_OVERRIDE || autoType).toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (type === 'UNKNOWN') return console.error('Uçak tipi adresten okunamadı. TYPE_OVERRIDE satırına tipi yazın (örn. \'A330\').');
+
+  // Revizyon: sayfa başlığından ("... Rev. num: 84 - 01-Oct-2026 ...")
+  const rm = /Rev\.?\s*num:?\s*(\d+)\s*-\s*(\d{1,2}-[A-Za-z]{3}-\d{4})/i.exec(document.title);
+  const revNum = rm ? rm[1] : '', revDate = rm ? rm[2] : '';
+  if (!revNum) return console.error('Revizyon numarası sayfa başlığında bulunamadı: ' + document.title);
+  console.log(`%c${type} IPC · REV:${revNum} · ${revDate} · önek: ${PREFIX} · chapter: ${CHAPTERS === 'ALL' ? 'TÜMÜ' : CHAPTERS.join(',')}`, 'font-weight:bold');
+
+  // ---- devam etme için küçük IndexedDB deposu ----
+  const IDB = {
+    open: () => new Promise((res, rej) => { const r = indexedDB.open('ipcscan', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }),
+    async set(k, v) { try { const d = await this.open(); await new Promise(res => { const t = d.transaction('kv', 'readwrite'); t.objectStore('kv').put(v, k); t.oncomplete = res; t.onerror = res; }); } catch (e) {} },
+    async all(prefix) { const out = new Map(); try { const d = await this.open();
+      await new Promise(res => { const q = d.transaction('kv').objectStore('kv').openCursor(IDBKeyRange.bound(prefix, prefix + '￿'));
+        q.onsuccess = () => { const c = q.result; if (c) { out.set(c.key, c.value); c.continue(); } else res(); }; q.onerror = () => res(); }); } catch (e) {} return out; },
+    async clear(prefix) { try { const d = await this.open(); await new Promise(res => { const t = d.transaction('kv', 'readwrite'); const s = t.objectStore('kv');
+      const q = s.openCursor(IDBKeyRange.bound(prefix, prefix + '￿')); q.onsuccess = () => { const c = q.result; if (c) { s.delete(c.key); c.continue(); } }; t.oncomplete = res; t.onerror = res; }); } catch (e) {} }
+  };
+  const KEY = `ipc|${PREFIX}|${revNum}|`;
+  if (!RESUME) await IDB.clear('ipc|');
+  const cache = RESUME ? await IDB.all(KEY) : new Map();
+  if (cache.size) console.log(`Önceki taramadan ${cache.size} kayıt hazır, tekrar indirilmeyecek.`);
+
+  // ---- istek katmanı: 404 -> {notFound}; 429/5xx/ağ hatası -> bekleyip yeniden dener ----
+  let nReq = 0, nErr = 0, pauseUntil = 0, lastSlow = 0, consecFail = 0;
+  window.__stop = false;
+  const call = async (method, url, body) => {
+    for (let k = 0; k < 5; k++) {
+      if (window.__stop) return null;
+      const w = pauseUntil - Date.now(); if (w > 0) await sleep(w);
+      try {
+        nReq++;
+        const opt = {method, credentials: 'include', headers: {Accept: 'application/json, text/plain, */*'}};
+        if (method === 'POST') { opt.headers['Content-Type'] = 'application/json;charset=utf-8'; opt.body = JSON.stringify(body || {}); }
+        const r = await fetch(url, opt);
+        if (r.status === 404) { consecFail = 0; return {notFound: true}; }
+        if (r.status === 429 || r.status >= 500) {
+          const ra = +r.headers.get('retry-after') || 0;
+          if (Date.now() - lastSlow > 3000) { lastSlow = Date.now(); pauseUntil = Math.max(pauseUntil, Date.now() + Math.max(ra * 1000, 1500)); }
+          throw new Error(r.status);
+        }
+        if (!r.ok) throw new Error(r.status);
+        const j = JSON.parse(await r.text());                      // oturum düşmüşse HTML döner -> burada hata verir
+        consecFail = 0; return j;
+      } catch (e) { nErr++; await sleep(400 * (k + 1)); }
+    }
+    if (++consecFail >= 25) { window.__stop = true; console.error('Art arda çok hata: oturum süresi dolmuş olabilir. Sayfayı yenileyip (gerekirse tekrar giriş yapıp) kodu yeniden çalıştırın; kaldığı yerden devam eder.'); }
+    return null;
+  };
+  const runPool = async (items, fn) => {
+    let i = 0;
+    const worker = async () => { while (!window.__stop) { const k = i++; if (k >= items.length) return; await fn(items[k], k); report(); } };
+    await Promise.all(Array.from({length: CONCURRENCY}, worker));
+  };
+  let lastLog = 0, phase = '', total = 0, done = 0;
+  const t0 = Date.now();
+  const report = () => {
+    if (Date.now() - lastLog < 5000) return; lastLog = Date.now();
+    console.log(`${phase}: ${done}/${total} · istek ${nReq} (${(nReq / ((Date.now() - t0) / 1000)).toFixed(1)}/sn) · hata ${nErr}`);
+  };
+
+  // ---- 1) Filo (kuyruk -> FSN/MSN/motor) ----
+  const bind = encodeURIComponent(JSON.stringify({actype: acs.length ? acs : [type], customization: [custo]}));
+  const fj = await call('GET', `${A}/filter/getFilter?filterType=tailNumber&maxResults=2000&msnBinding=${bind}&revId=${PREFIX}&searchFilter=&searchMode=document.toc`);
+  if (!fj || !fj.results) return console.error('Filo (getFilter) alınamadı.');
+  if (fj.nbResults > fj.results.length) console.warn(`Filo eksik geldi: ${fj.results.length}/${fj.nbResults}`);
+  const fleet = fj.results.map(x => {
+    const p = String((x.aircraftDetail || [''])[0]).split(' - ').map(s => s.trim());
+    return {id: x.id, reg: p[0] || '', fsn: parseInt(p[1], 10) || null, eng: p.slice(2).join(' - '), msn: x.msn || ''};
+  }).sort((a, b) => (a.fsn == null) - (b.fsn == null) || a.fsn - b.fsn);
+  const fidx = new Map(fleet.map((f, i) => [f.id, i]));
+  console.log(`Filo: ${fleet.length} uçak`);
+
+  // ---- 2) Chapter kökleri ve figür ağacı ----
+  const rootJ = await call('GET', `${A}/toc/${PREFIX}/getRootToc`);
+  if (!rootJ || !rootJ.childTocItems) return console.error('Kök içindekiler (getRootToc) alınamadı.');
+  const chOf = c => (/^(\S+)\s+-\s+/.exec(c.title || '') || [])[1] || '';
+  const chapters = rootJ.childTocItems.filter(c => c.id && chOf(c)).map(c => ({id: c.id, ch: chOf(c), title: clean(c.title)}))
+    .filter(c => CHAPTERS === 'ALL' || CHAPTERS.includes(c.ch)).sort((a, b) => a.ch.localeCompare(b.ch));
+  if (!chapters.length) return console.error('İstenen chapter kökte bulunamadı. Kökteki chapter\'lar: ' + rootJ.childTocItems.map(chOf).join(','));
+  const TOC = `${A}/toc/${PREFIX}/getTocItems?id=`;
+  const figs = new Map(), sections = {}, tocFail = [];
+  const addSol = (s, ch) => {
+    if (!s) return;
+    if (s.id && /^FIG\./i.test(s.title || '') && !/DELETED/i.test(s.title) && !figs.has(s.id)) {
+      const t = parseFigTitle(s.title);
+      figs.set(s.id, {id: s.id, ch, ref: t.ref, name: t.name, zones: t.zones, date: t.date,
+        app: clean(s.applicability).replace(/^[*\s]*ON A\/C\s*/i, '')});
+    }
+    (s.solutions || []).forEach(x => addSol(x, ch));
+  };
+  for (const c of chapters) {
+    phase = `Ağaç ${c.ch}`; total = 1; done = 0;
+    const seen = new Set([c.id]);
+    let level = [c.id];
+    while (level.length && !window.__stop) {
+      const next = [];
+      await runPool(level, async id => {
+        const j = await call('GET', TOC + encodeURIComponent(id));
+        if (!j || j.notFound) { if (id !== c.id) tocFail.push(id); return; }
+        (j.childTocItems || []).forEach(k => {
+          if (!k.id || seen.has(k.id)) return; seen.add(k.id); next.push(k.id);
+          const m = /^(\d\d-\d\d(?:-\d\d)?)\s+-\s+(.*)$/.exec(clean(k.title)); if (m) sections[m[1]] = m[2];
+        });
+        (j.listSolutions || []).forEach(s => addSol(s, c.ch));
+        done++; total = done + next.length;
+      });
+      level = next;
+    }
+    console.log(`✔ Chapter ${c.ch}: ${[...figs.values()].filter(f => f.ch === c.ch).length} figür`);
+  }
+  if (tocFail.length) console.warn(`${tocFail.length} ağaç düğümü alınamadı (tekrar çalıştırınca denenir).`);
+  const figList = [...figs.values()];
+  console.log(`Toplam ${figList.length} figür bulundu.` + (MAX_FIGS && figList.length > MAX_FIGS ? ` DENEME: yalnızca ilk ${MAX_FIGS} tanesi taranacak.` : '') + ' Figür içerikleri indiriliyor...');
+  if (MAX_FIGS) figList.splice(MAX_FIGS);
+
+  // ---- 3) Figür içerikleri (parça satırları) ----
+  const BODY = {msnPnFilters: {msnList: [], pnList: [], acTypes: acs.length ? acs : [type]}, highlightedContentsWords: []};
+  const rowsOf = new Map();                                        // figür kimliği -> satırlar
+  const figTodo = [];
+  figList.forEach(f => { const c = cache.get(KEY + 'fig|' + f.id); if (c) rowsOf.set(f.id, c); else figTodo.push(f); });
+  phase = 'Figür'; total = figList.length; done = figList.length - figTodo.length;
+  const figFail = [];
+  await runPool(figTodo, async f => {
+    const j = await call('POST', `${A}/dataModule/content?dataModuleId=${encodeURIComponent(f.id)}&forHatch=false&forPrint=false`, BODY);
+    const html = j && j.responseContent && j.responseContent.response;
+    if (!html) { figFail.push(f.id); return; }
+    const rows = parseFigure(html);
+    rowsOf.set(f.id, rows); await IDB.set(KEY + 'fig|' + f.id, rows); done++;
+  });
+  if (figFail.length) console.warn(`${figFail.length} figür alınamadı (tekrar çalıştırınca denenir): ${figFail.slice(0, 5).join(', ')}...`);
+
+  // ---- 4) CMM bilgisi (parça başına: arama -> PNR verisi) ----
+  const cmmOf = new Map();                                         // "pn|vendor" -> {c:[{n,s}], ok:true/false}
+  if (FETCH_CMM && !window.__stop) {
+    const keys = new Set();
+    rowsOf.forEach(rows => rows.forEach(r => { if (r.pn) keys.add(r.pn + '|' + r.vendor); }));
+    const todo = [];
+    keys.forEach(k => { const c = cache.get(KEY + 'cmm|' + k); if (c) cmmOf.set(k, c); else todo.push(k); });
+    phase = 'CMM'; total = keys.size; done = keys.size - todo.length;
+    console.log(`${keys.size} farklı parça, ${todo.length} tanesi için CMM sorgulanacak...`);
+    const pick = (results, pn, vendor) => {
+      const cirs = (results || []).filter(x => x.contentType === 'CIR' && x.cirId && /PNRDATA/i.test(x.type || ''));
+      const exact = cirs.find(x => (x.cirCodes || [x.cirCode]).some(c => clean(c) === (vendor ? `${pn} (${vendor})` : pn)));
+      return (exact || cirs.find(x => clean(x.cirCode).startsWith(pn)) || {}).cirId || null;
+    };
+    await runPool(todo, async k => {
+      const [pn, vendor] = k.split('|');
+      let sj = await call('GET', `${A}/viewer/searchDocument?aggregationList=ata2&aggregationList=actype&aggregationList=customization&aggregationList=doctypebc&page=1&q=${encodeURIComponent(vendor ? `${pn} (${vendor})` : pn)}&queryWithAggregation=false&revItemId=${PREFIX}&wc=${encodeURIComponent(wc)}`);
+      if (!sj) return;                                             // geçici hata: kaydetme, sonra tekrar denenir
+      let cir = pick(sj.results, pn, vendor);
+      const rec = {c: [], ok: true};
+      if (cir) {
+        const fj2 = await call('POST', `${A}/cir/pnrdata_ipc/fragment?cirId=${encodeURIComponent(cir)}&customization=${encodeURIComponent(custo)}&forHatch=false`, BODY);
+        const html = fj2 && fj2.responseContent && fj2.responseContent.response;
+        if (!html) return;
+        rec.c = parseCmm(html);
+      }
+      cmmOf.set(k, rec); await IDB.set(KEY + 'cmm|' + k, rec); done++;
+    });
+  }
+
+  // ---- 5) Çıktıyı derle ve indir ----
+  if (window.__stop) return console.warn('Durduruldu. Aynı kodu tekrar çalıştırırsanız kaldığı yerden devam eder.');
+  const fmOf = ids => { const ix = ids.map(i => fidx.get(i)).filter(i => i != null); return ix.length >= fleet.length ? '*' : rangeStr(ix); };
+  const outFigs = [], outRows = [];
+  figList.sort((a, b) => a.ref.localeCompare(b.ref) || a.id.localeCompare(b.id)).forEach(f => {
+    const rows = rowsOf.get(f.id); if (!rows) return;
+    const fm = fmOf([...new Set(rows.flatMap(r => r.m))]);
+    const fi = outFigs.length;
+    outFigs.push({id: f.id.slice(PREFIX.length + 3), ref: f.ref, name: f.name, zones: f.zones, app: f.app, fm: rows.length ? fm : '*', ch: f.ch});
+    rows.forEach(r => {
+      const m = fmOf(r.m);
+      const cm = r.pn ? (cmmOf.get(r.pn + '|' + r.vendor) || {}).c || [] : [];
+      outRows.push([fi, r.item, r.pn, r.vendor, r.nom, r.fin, r.qty, m === fm ? '' : m, [...new Set(cm.map(x => x.n))].join(',')]);
+    });
+  });
+  const cmmSup = {};
+  cmmOf.forEach(v => v.c.forEach(x => {                           // aynı CMM no birden çok tedarikçide olabilir: "A,B"
+    const a = cmmSup[x.n] ? cmmSup[x.n].split(',') : [];
+    if (x.s && !a.includes(x.s)) a.push(x.s);
+    cmmSup[x.n] = a.join(',');
+  }));
+  const nPn = new Set(outRows.map(r => r[2] + '|' + r[3])).size;
+  const nCmm = new Set(outRows.filter(r => r[8]).map(r => r[2] + '|' + r[3])).size;
+  const data = {
+    meta: {type, ac: acs, custo, revNum, revDate, prefix: PREFIX, exported: new Date().toISOString(),
+      linkTemplate: `${O}/${seg}/document/${PREFIX}/toc?itemId=${PREFIX}_EN{ID}&itemType=DATAMODULE&wc=${wc}`,
+      chapters: chapters.map(c => ({ch: c.ch, title: c.title})), sections,
+      cols: ['fig', 'item', 'pn', 'vendor', 'nom', 'fin', 'qty', 'm', 'cmm'], counts: {figures: outFigs.length, rows: outRows.length, parts: nPn, partsWithCmm: nCmm, treeFigures: figs.size, scanMinutes: +((Date.now() - t0) / 60000).toFixed(1)}},
+    fleet: fleet.map(f => ({reg: f.reg, fsn: f.fsn, msn: f.msn, eng: f.eng})),
+    figs: outFigs, rows: outRows, cmmSup
+  };
+  window.__ipc = data;
+  const blob = new Blob([JSON.stringify(data)], {type: 'application/json'});
+  const a = document.createElement('a');
+  const fname = `ipc_${type}${MAX_FIGS ? '_DENEME' : ''}.json`;
+  a.href = URL.createObjectURL(blob); a.download = fname;
+  document.body.appendChild(a); a.click(); a.remove();
+  console.log(`%c✔ Bitti: ${fname} indi · ${outFigs.length} figür · ${outRows.length} satır · ${nPn} parça (${nCmm} tanesinin CMM'i var) · ${((Date.now() - t0) / 60000).toFixed(1)} dk`, 'font-weight:bold');
+  if (figFail.length || tocFail.length) console.warn('Eksik kalanlar var: kodu bir kez daha çalıştırın, sadece eksikleri indirir.');
+})();
