@@ -12,6 +12,7 @@
   const SKIP_HW = true;       // true: adı SCREW/WASHER/NUT/SEAL/BRACKET... gibi küçük donanım olan parçaları CMM sorgusundan çıkarır (bunların CMM'i olmaz)
   const SKIP_NOFLEET = true;  // true: yalnızca filomuzdaki hiçbir uçağa uygulanmayan parçaları CMM sorgusundan çıkarır
   const SAVE_ONLY_CMM = true; // true: dosyaya yalnızca CMM'i olan satırları yazar (25 MB GitHub sınırının altında kalır; sayfa zaten yalnız CMM'lileri gösterir)
+  const DROP_DETAIL = true;   // true: ATA bölümünde (örn. 25-42) '... - INSTL' figürü varsa ve uygulanabilirliği kapsıyorsa, alt detay figürlerinin CMM'li satırlarını atar
   const FETCH_CMM = true;     // true: her parça için Numerical Index'ten CMM bilgisini de alır (parça başına 2 istek)
   const TYPE_OVERRIDE = '';   // boş: tip adresten okunur (A330, A32x ailesi 'A320'). Elle: örn. 'A330'
   const RESUME = true;        // true: yarım kalan tarama aynı revizyonsa kaldığı yerden devam eder
@@ -298,6 +299,29 @@
       outRows.push([fi, r.item, r.pn, r.vendor, r.nom, r.fin, r.qty, m, [...new Set(cm.map(x => x.n))].join(','), ei]);
     });
   });
+  if (DROP_DETAIL && FETCH_CMM) {
+    const isIns = f => /INSTL\s*$/.test(sections[f.ref.slice(0, 8)] || '');
+    const insFig = outFigs.map(isIns), N = fleet.length;
+    const setOf = r => {                                          // satırın uygulandığı uçak indeksleri
+      const str = r[7] === '-' ? '' : (r[7] || outFigs[r[0]].fm), set = new Uint8Array(N);
+      if (str === '*') set.fill(1); else str.split(',').filter(Boolean).forEach(p => { const [a, b] = p.split('-').map(Number); for (let i = a; i <= (isNaN(b) ? a : b); i++) set[i] = 1; });
+      return set;
+    };
+    const grp = new Map();
+    outRows.forEach((r, i) => { if (!r[8] || !r[2]) return; const k = outFigs[r[0]].ref.slice(0, 5); (grp.get(k) || grp.set(k, []).get(k)).push(i); });
+    const drop = new Set();
+    grp.forEach(ix => {
+      const ins = ix.filter(i => insFig[outRows[i][0]]).map(i => ({r: outRows[i], s: setOf(outRows[i])}));
+      if (!ins.length) return;
+      ix.forEach(i => {
+        if (insFig[outRows[i][0]]) return;
+        const d = outRows[i], ds = setOf(d), de = d[9] === '' ? '' : effs[d[9]];
+        if (ins.some(o => (o.r[9] === '' || effs[o.r[9]] === de) && ds.every((v, j) => !v || o.s[j]))) drop.add(i);
+      });
+    });
+    if (drop.size) { const keep = outRows.filter((r, i) => !drop.has(i)); outRows.length = 0; outRows.push(...keep); }
+    console.log(`INSTL öncelikli eleme: ${drop.size} detay satırı atıldı.`);
+  }
   if (SAVE_ONLY_CMM && FETCH_CMM) {                                // CMM'siz satırları, kullanılmayan figür ve uygulanabilirlik kayıtlarını at
     const fMap = new Map(), eMap = new Map(), figs2 = [], effs2 = [], rows2 = [];
     outRows.forEach(r => {

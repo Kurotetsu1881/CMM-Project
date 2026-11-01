@@ -89,7 +89,7 @@
 
         .table-wrap { border: 1px solid rgba(55, 65, 81, 0.5); }
         .head-bar { background: rgba(17, 24, 39, 0.85); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); border-bottom: 2px solid rgba(239, 68, 68, 0.6); color: #e5e7eb; }
-        .body-scroll { background: rgba(3, 7, 18, 0.82); }
+        .body-scroll { background: rgba(3, 7, 18, 0.82); scrollbar-gutter: stable; }
         .icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 38px; height: 38px; margin: -6px 0; color: #9ca3af; background: none; border: 0; cursor: pointer; vertical-align: middle; }
         .icon-btn:hover { color: #f87171; }
         .edit-txt { display: none; }
@@ -193,8 +193,8 @@
                     <table class="w-full text-left border-collapse table-fixed">
                         <colgroup><col style="width: 36%"><col style="width: 22%"><col style="width: 13%"><col style="width: 21%"><col style="width: 70px"></colgroup>
                         <thead class="text-xs uppercase tracking-wider"><tr>
-                            <th class="px-3 py-3.5 font-semibold">Lokasyon</th><th class="px-3 py-3.5 font-semibold">Parça numarası</th>
-                            <th class="px-3 py-3.5 font-semibold">Vendor code</th><th class="px-3 py-3.5 font-semibold">CMM</th><th class="px-2 py-3.5 text-center font-semibold">İşlem</th>
+                            <th class="px-3.5 py-3.5 font-semibold">Lokasyon</th><th class="px-3.5 py-3.5 font-semibold">Parça numarası</th>
+                            <th class="px-3.5 py-3.5 font-semibold">Vendor code</th><th class="px-3.5 py-3.5 font-semibold">CMM</th><th class="px-2 py-3.5 text-center font-semibold">İşlem</th>
                         </tr></thead>
                     </table>
                 </div>
@@ -351,19 +351,34 @@
         function buildBase() {
             const a = S.ac, ds = a.ds, figOk = ds.figs.map(f => inSet(f.fm, a.idx));
             const effOk = (ds.effs || []).map(t => fsnOk(t, +a.fsn));
-            const seen = new Map(), out = [];
+            const secs = ds.meta.sections || {};
+            const figIns = ds.figs.map(f => /INSTL\s*$/.test(secs[f.ref.slice(0, 8)] || ''));   // "... - INSTL" bölümündeki figürler öncelikli
+            // 1. geçiş: uçağa uygun satırlar
+            const cand = [], insSec = new Set();
             for (const r of ds.rows) {
                 const f = ds.figs[r[0]];
                 if (!figOk[r[0]] || !inSet(r[7] || f.fm, a.idx)) continue;
                 if (r[9] !== '' && r[9] != null && effOk[r[9]] === false) continue;   // IPC'deki "ON A/C FSN ..." metni uçağın FSN'sine uymuyorsa gösterme
-                const key = r[2] + '|' + r[3] + '|' + r[4] + '|' + r[5] + '|' + r[8];
+                cand.push(r);
+                if (figIns[r[0]]) insSec.add(f.ref.slice(0, 5));                      // bu ATA bölümünde (örn. 25-42) uçağa uygun INSTL kaydı var
+            }
+            cand.sort((x, y) => ds.figs[x[0]].ref.localeCompare(ds.figs[y[0]].ref, 'en', { numeric: true }) || x[1].localeCompare(y[1], 'en', { numeric: true }));
+            // 2. geçiş: INSTL varsa o bölümde alt detay figürlerine bakma; aynı P/N + vendor + CMM'i bir kez göster
+            const seen = new Map(), out = [];
+            for (const r of cand) {
+                const f = ds.figs[r[0]];
+                if (!figIns[r[0]] && insSec.has(f.ref.slice(0, 5))) continue;
+                const key = r[2] + '|' + r[3] + '|' + r[8];
                 const hit = seen.get(key);
-                if (hit) { if (hit.refs.length < 6 && !hit.refs.some(x => x.id === f.id)) hit.refs.push(f); hit.n++; continue; }
-                const o = { ch: f.ch, sec: f.ref.slice(0, 5), pn: r[2], vendor: r[3], nom: r[4] || f.name, fin: r[5], cmm: r[8] ? r[8].split(',') : [], refs: [f], fig: f, item: r[1], n: 1, eff: (ds.effs && r[9] !== '' && r[9] != null) ? ds.effs[r[9]] : '' };
-                o.search = norm([o.pn, o.vendor, o.nom, o.fin, o.cmm.map(fmtCmm).join(' '), f.ref, f.name].join(' '));
+                if (hit) {
+                    if (hit.refs.length < 6 && !hit.refs.some(x => x.id === f.id)) hit.refs.push(f);
+                    if (r[5] && !hit.fins.includes(r[5])) hit.fins.push(r[5]);
+                    hit.n++; continue;
+                }
+                const o = { ch: f.ch, sec: f.ref.slice(0, 5), pn: r[2], vendor: r[3], nom: r[4] || f.name, fin: r[5], fins: r[5] ? [r[5]] : [], cmm: r[8] ? r[8].split(',') : [], refs: [f], fig: f, item: r[1], n: 1, eff: (ds.effs && r[9] !== '' && r[9] != null) ? ds.effs[r[9]] : '' };
                 seen.set(key, o); out.push(o);
             }
-            out.sort((x, y) => x.fig.ref.localeCompare(y.fig.ref, 'en', { numeric: true }) || x.item.localeCompare(y.item, 'en', { numeric: true }));
+            out.forEach(o => { o.search = norm([o.pn, o.vendor, o.nom, o.fins.join(' '), o.cmm.map(fmtCmm).join(' '), o.fig.ref, o.fig.name].join(' ')); });
             S.base = out.filter(o => o.cmm.length);   // yalnızca CMM'i olan parçalar listelenir
         }
 
@@ -430,11 +445,16 @@
                 esc('Üretici kodu: ' + (S.ac.ds.cmmSup[n] || '-')) + '">' + esc(fmtCmm(n)) + '</a>').join('<br>') : '<span class="no-cmm">-</span>';
             return '<tr class="hover:bg-gray-800 hover:bg-opacity-40 transition-colors">' +
                 '<td class="px-3.5 py-3 cell-loc align-top" data-label="Lokasyon"><span class="wrap"><span class="loc-main">' + esc(o.nom) + '</span><span class="loc-sub">' + sub.join(' · ') + more + '</span></span></td>' +
-                '<td class="px-3.5 py-3 align-top" data-label="Parça no"><span class="pn">' + esc(o.pn) + '</span>' + (o.fin ? '<span class="fin">FIN ' + esc(o.fin) + '</span>' : '') + '</td>' +
+                '<td class="px-3.5 py-3 align-top" data-label="Parça no"><span class="pn">' + esc(o.pn) + '</span>' + (o.fins.length ? '<span class="fin">FIN ' + esc(o.fins.slice(0, 3).join(', ')) + (o.fins.length > 3 ? ' +' + (o.fins.length - 3) : '') + '</span>' : '') + '</td>' +
                 '<td class="px-3.5 py-3 align-top" data-label="Vendor">' + esc(o.vendor || '-') + '</td>' +
                 '<td class="px-3.5 py-3 align-top" data-label="CMM">' + cmm + '</td>' +
                 '<td class="px-2 py-3 text-center cell-act align-top"><a href="' + esc(reportUrl(o)) + '" class="icon-btn edit-link" title="Hatalı / eksik bildir" aria-label="Hatalı / eksik bildir">' + EDIT_ICON + '<span class="edit-txt">Hatalı / eksik bildir</span></a></td></tr>';
         }
+        function syncHead() {                                         // kaydırma çubuğu genişliği kadar başlık tablosunu daralt: sütunlar hizalı kalsın
+            const b = $('bodyScroll'), h = $('headWrap');
+            if (b && h) h.style.paddingRight = Math.max(0, b.offsetWidth - b.clientWidth) + 'px';
+        }
+        window.addEventListener('resize', syncHead);
         function renderMore(first) {
             const next = S.filtered.slice(S.shown, S.shown + PAGE);
             $('tableBody').insertAdjacentHTML('beforeend', next.map(rowHtml).join(''));
@@ -448,6 +468,7 @@
                 $('emptyState').textContent = 'Bu filtrelerle sonuç bulunamadı.';
             }
             if (first) $('bodyScroll').scrollTop = 0;
+            syncHead();
         }
 
         // ---------- Adres (paylaşılabilir bağlantı) ----------
