@@ -256,7 +256,7 @@
             }));
             const bad = res.filter(x => x.err);
             res.filter(x => !x.err).forEach(x => {
-                const d = x.d, ds = { file: x.f, meta: d.meta, fleet: d.fleet, figs: d.figs, rows: d.rows, cmmSup: d.cmmSup || {} };
+                const d = x.d, ds = { file: x.f, meta: d.meta, fleet: d.fleet, figs: d.figs, rows: d.rows, effs: d.effs || [], cmmSup: d.cmmSup || {} };
                 S.sets.push(ds);
                 d.fleet.forEach((a, i) => S.aircraft.push({ reg: a.reg, key: nk(a.reg), fsn: a.fsn, msn: a.msn, eng: a.eng, ds, idx: i }));
             });
@@ -338,12 +338,24 @@
         }
 
         // ---------- Uçağa uygun satırlar ----------
+        // "FSN 203-250, 300-310" -> uçağın FSN'si bu aralıklardaysa true. FSN'e bağlı olmayan metinlerde ("USED WITH ...", "FSN ALL") null -> kısıtlama yok
+        function fsnOk(text, fsn) {
+            const m = /^FSN\s+([\d\s,\-–]+)$/i.exec(String(text || '').trim());
+            if (!m || !fsn) return true;
+            for (const part of m[1].split(',')) {
+                const x = part.trim().split(/\s*[-–]\s*/), lo = +x[0], hi = x.length > 1 ? +x[1] : lo;
+                if (fsn >= lo && fsn <= hi) return true;
+            }
+            return false;
+        }
         function buildBase() {
             const a = S.ac, ds = a.ds, figOk = ds.figs.map(f => inSet(f.fm, a.idx));
+            const effOk = (ds.effs || []).map(t => fsnOk(t, +a.fsn));
             const seen = new Map(), out = [];
             for (const r of ds.rows) {
                 const f = ds.figs[r[0]];
                 if (!figOk[r[0]] || !inSet(r[7] || f.fm, a.idx)) continue;
+                if (r[9] !== '' && r[9] != null && effOk[r[9]] === false) continue;   // IPC'deki "ON A/C FSN ..." metni uçağın FSN'sine uymuyorsa gösterme
                 const key = r[2] + '|' + r[3] + '|' + r[4] + '|' + r[5] + '|' + r[8];
                 const hit = seen.get(key);
                 if (hit) { if (hit.refs.length < 6 && !hit.refs.some(x => x.id === f.id)) hit.refs.push(f); hit.n++; continue; }

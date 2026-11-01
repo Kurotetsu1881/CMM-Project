@@ -11,6 +11,7 @@
   const SKIP_STD = true;      // true: standart bağlantı elemanlarını (NAS/MS/AN/ABS... cıvata, somun, pul) CMM sorgusundan çıkarır; bunların CMM'i olmaz, süreyi ciddi azaltır
   const SKIP_HW = true;       // true: adı SCREW/WASHER/NUT/SEAL/BRACKET... gibi küçük donanım olan parçaları CMM sorgusundan çıkarır (bunların CMM'i olmaz)
   const SKIP_NOFLEET = true;  // true: yalnızca filomuzdaki hiçbir uçağa uygulanmayan parçaları CMM sorgusundan çıkarır
+  const SAVE_ONLY_CMM = true; // true: dosyaya yalnızca CMM'i olan satırları yazar (25 MB GitHub sınırının altında kalır; sayfa zaten yalnız CMM'lileri gösterir)
   const FETCH_CMM = true;     // true: her parça için Numerical Index'ten CMM bilgisini de alır (parça başına 2 istek)
   const TYPE_OVERRIDE = '';   // boş: tip adresten okunur (A330, A32x ailesi 'A320'). Elle: örn. 'A330'
   const RESUME = true;        // true: yarım kalan tarama aynı revizyonsa kaldığı yerden devam eder
@@ -297,6 +298,17 @@
       outRows.push([fi, r.item, r.pn, r.vendor, r.nom, r.fin, r.qty, m, [...new Set(cm.map(x => x.n))].join(','), ei]);
     });
   });
+  if (SAVE_ONLY_CMM && FETCH_CMM) {                                // CMM'siz satırları, kullanılmayan figür ve uygulanabilirlik kayıtlarını at
+    const fMap = new Map(), eMap = new Map(), figs2 = [], effs2 = [], rows2 = [];
+    outRows.forEach(r => {
+      if (!r[8]) return;
+      if (!fMap.has(r[0])) { fMap.set(r[0], figs2.length); figs2.push(outFigs[r[0]]); }
+      let e = r[9];
+      if (e !== '') { if (!eMap.has(e)) { eMap.set(e, effs2.length); effs2.push(effs[e]); } e = eMap.get(e); }
+      rows2.push([fMap.get(r[0]), ...r.slice(1, 9), e]);
+    });
+    outFigs.length = 0; outFigs.push(...figs2); effs.length = 0; effs.push(...effs2); outRows.length = 0; outRows.push(...rows2);
+  }
   const cmmSup = {};
   cmmOf.forEach(v => v.c.forEach(x => {                           // aynı CMM no birden çok tedarikçide olabilir: "A,B"
     const a = cmmSup[x.n] ? cmmSup[x.n].split(',') : [];
