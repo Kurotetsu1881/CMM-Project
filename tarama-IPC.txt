@@ -9,6 +9,8 @@
   const MAX_CONC = 24;        // otomatik hızlanmanın üst sınırı (kod sunucu sorunsuzsa 2'şer artırır, hata görürse yarıya indirir)
   const CONCURRENCY = 10;     // aynı anda kaç istek (3-8 arası uygundur; sunucu zorlanırsa kod kendisi yavaşlar)
   const SKIP_STD = true;      // true: standart bağlantı elemanlarını (NAS/MS/AN/ABS... cıvata, somun, pul) CMM sorgusundan çıkarır; bunların CMM'i olmaz, süreyi ciddi azaltır
+  const SKIP_HW = true;       // true: adı SCREW/WASHER/NUT/SEAL/BRACKET... gibi küçük donanım olan parçaları CMM sorgusundan çıkarır (bunların CMM'i olmaz)
+  const SKIP_NOFLEET = true;  // true: yalnızca filomuzdaki hiçbir uçağa uygulanmayan parçaları CMM sorgusundan çıkarır
   const FETCH_CMM = true;     // true: her parça için Numerical Index'ten CMM bilgisini de alır (parça başına 2 istek)
   const TYPE_OVERRIDE = '';   // boş: tip adresten okunur (A330, A32x ailesi 'A320'). Elle: örn. 'A330'
   const RESUME = true;        // true: yarım kalan tarama aynı revizyonsa kaldığı yerden devam eder
@@ -236,8 +238,17 @@
   // ---- 4) CMM bilgisi (parça başına: arama -> PNR verisi) ----
   const cmmOf = new Map();                                         // "pn|vendor" -> {c:[{n,s}], ok:true/false}
   if (FETCH_CMM && !window.__stop) {
-    const keys = new Set();
-    rowsOf.forEach(rows => rows.forEach(r => { if (r.pn) keys.add(r.pn + '|' + r.vendor); }));
+    const keys = new Set(), HW = new RegExp('^(SCREW|WASHER|NUT|BOLT|STUD|RIVET|PIN|COTTER|CLIP|CLAMP|BRACKET|SPACER|SHIM|GASKET|SEAL|O-RING|GROMMET|BUSHING|PACKING|RETAINER|DOUBLER|ANGLE|BUMPER|MATTRESS|CURTAIN|MATERIAL|LABEL|PLACARD|STRAP|TIE|INSERT|SLEEVE|STRIP|TAPE|ADHESIVE|SEALANT|RING|TURNBUTTON|HOOK|NIPPLE|ELBOW|TEE|UNION|SPRING|BEARING|BELT|CORD|LANYARD|FOAM|FELT|FILLER|FERRULE|CABLE-TIE)(?![A-Z])');
+    const used = new Map();                                        // anahtar -> en az bir satırı filomuza uygulanıyor mu / donanım mı
+    rowsOf.forEach(rows => rows.forEach(r => {
+      if (!r.pn) return;
+      const k = r.pn + '|' + r.vendor, inFleet = !r.info || r.m.some(i => fidx.has(i)), hw = HW.test(String(r.nom || '').toUpperCase());
+      const u = used.get(k) || {fleet: false, hw: true};
+      u.fleet = u.fleet || inFleet; u.hw = u.hw && hw; used.set(k, u);
+    }));
+    let nHw = 0, nNoFleet = 0;
+    used.forEach((u, k) => { if (SKIP_NOFLEET && !u.fleet) nNoFleet++; else if (SKIP_HW && u.hw) nHw++; else keys.add(k); });
+    if (nHw || nNoFleet) console.log(`CMM sorgusundan çıkarılan: ${nHw} küçük donanım, ${nNoFleet} filoya uygulanmayan parça.`);
     const todo = [];
     const STD = /^(ABS|NAS|MS|AN|EN|LN|NSA|DIN|ISO|BACB|BACN|BACS|BACW|BACR|BACC|ASNA|ESNA|HST|TAN|SPS)\d/i;
     let nStd = 0;
