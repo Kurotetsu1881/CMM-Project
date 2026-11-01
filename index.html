@@ -237,7 +237,7 @@
         // "0-2,5,7-8" aralık metninde i var mı?
         function inSet(str, i) {
             if (str === '*') return true;
-            if (!str) return false;
+            if (!str || str === '-') return false;
             for (const p of str.split(',')) {
                 const k = p.indexOf('-');
                 const lo = +(k < 0 ? p : p.slice(0, k)), hi = k < 0 ? lo : +p.slice(k + 1);
@@ -347,7 +347,7 @@
                 const key = r[2] + '|' + r[3] + '|' + r[4] + '|' + r[5] + '|' + r[8];
                 const hit = seen.get(key);
                 if (hit) { if (hit.refs.length < 6 && !hit.refs.some(x => x.id === f.id)) hit.refs.push(f); hit.n++; continue; }
-                const o = { ch: f.ch, sec: f.ref.slice(0, 5), pn: r[2], vendor: r[3], nom: r[4] || f.name, fin: r[5], cmm: r[8] ? r[8].split(',') : [], refs: [f], fig: f, item: r[1], n: 1 };
+                const o = { ch: f.ch, sec: f.ref.slice(0, 5), pn: r[2], vendor: r[3], nom: r[4] || f.name, fin: r[5], cmm: r[8] ? r[8].split(',') : [], refs: [f], fig: f, item: r[1], n: 1, eff: (ds.effs && r[9] !== '' && r[9] != null) ? ds.effs[r[9]] : '' };
                 o.search = norm([o.pn, o.vendor, o.nom, o.fin, o.cmm.map(fmtCmm).join(' '), f.ref, f.name].join(' '));
                 seen.set(key, o); out.push(o);
             }
@@ -412,6 +412,7 @@
         function rowHtml(o) {
             const f = o.fig, sub = [figLink(f), esc(f.name)];
             if (f.zones) sub.push('Zone ' + esc(f.zones));
+            if (o.eff) sub.push('<span class="tag" title="IPC uygulanabilirlik">' + esc(o.eff) + '</span>');
             const more = o.refs.length > 1 ? ' <span class="tag" title="' + esc(o.refs.map(x => x.ref).join(', ')) + '">+' + (o.refs.length - 1) + ' figür</span>' : '';
             const cmm = o.cmm.length ? o.cmm.map(n => '<a class="cmm-link" href="' + esc(CMM_LINK + encodeURIComponent(fmtCmm(n))) + '" target="_blank" rel="noopener noreferrer" title="' +
                 esc('Üretici kodu: ' + (S.ac.ds.cmmSup[n] || '-')) + '">' + esc(fmtCmm(n)) + '</a>').join('<br>') : '<span class="no-cmm">-</span>';

@@ -22,8 +22,15 @@
   const parseFigure = html => {
     const doc = new DOMParser().parseFromString(html, 'text/html');
     const out = [];
-    doc.querySelectorAll('table.aipcTable tr[id^="item_"]').forEach(r => {
-      if (!r.cells || r.cells.length < 5) return;                  // boş "id" tekrar satırlarını ele
+    let cur = null;                                                // son görülen "** ON A/C FSN 203-250" başlığı: {ids, txt}
+    const ids = v => String(v || '').split(',').map(x => x.trim()).filter(Boolean);
+    doc.querySelectorAll('table.aipcTable tr').forEach(r => {
+      const ef = r.querySelector('.applic-effect, .effect .applic');
+      if (ef && !r.id) {                                           // uygulanabilirlik başlık satırı: aşağıdaki satırlara uygulanır
+        cur = {ids: ids(r.getAttribute('msn') || ef.getAttribute('adns-actable-popin')), txt: clean(ef.textContent).replace(/^\*+\s*/, '').replace(/^ON A\/C\s*/i, '')};
+        return;
+      }
+      if (!/^item_/.test(r.id || '') || !r.cells || r.cells.length < 5) return;   // boş "id" tekrar satırlarını ele
       const c = r.cells;
       const link = c[1].querySelector('adns-link[adns-target-id]');
       let pn = '', vendor = '';
@@ -33,12 +40,13 @@
       const nd = c[2].querySelector('div');
       const raw = clean(nd ? nd.textContent : c[2].textContent);
       const dots = /^\.+/.exec(raw);
-      const msnAttr = r.getAttribute('msn') || (r.closest('[msn]') ? r.closest('[msn]').getAttribute('msn') : '') || '';
+      const own = ids(r.getAttribute('msn') || (r.closest('[msn]') ? r.closest('[msn]').getAttribute('msn') : ''));
+      const m = own.length ? own : (cur ? cur.ids : []);           // satırın kendi msn'i yoksa üstteki başlığınkini devral
       out.push({
         item: r.id.replace(/^item_/, ''), pn, vendor,
         nom: raw.replace(/^\.+\s*/, ''), lv: dots ? dots[0].length : 0,
         fin: clean(c[3].textContent), qty: clean(c[4].textContent),
-        m: msnAttr.split(',').map(x => x.trim()).filter(Boolean)
+        m, info: m.length > 0, eff: cur ? cur.txt : ''
       });
     });
     return out;
@@ -98,10 +106,10 @@
       r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => res(r.result); r.onerror = () => { this._d = null; rej(r.error); }; })); },
     async set(k, v) { try { const d = await this.open(); await new Promise(res => { const t = d.transaction('kv', 'readwrite'); t.objectStore('kv').put(v, k); t.oncomplete = res; t.onerror = res; }); } catch (e) {} },
     async all(prefix) { const out = new Map(); try { const d = await this.open();
-      await new Promise(res => { const q = d.transaction('kv').objectStore('kv').openCursor(IDBKeyRange.bound(prefix, prefix + ' '));
+      await new Promise(res => { const q = d.transaction('kv').objectStore('kv').openCursor(IDBKeyRange.bound(prefix, prefix + '￿'));
         q.onsuccess = () => { const c = q.result; if (c) { out.set(c.key, c.value); c.continue(); } else res(); }; q.onerror = () => res(); }); } catch (e) {} return out; },
     async clear(prefix) { try { const d = await this.open(); await new Promise(res => { const t = d.transaction('kv', 'readwrite'); const s = t.objectStore('kv');
-      const q = s.openCursor(IDBKeyRange.bound(prefix, prefix + ' ')); q.onsuccess = () => { const c = q.result; if (c) { s.delete(c.key); c.continue(); } }; t.oncomplete = res; t.onerror = res; }); } catch (e) {} }
+      const q = s.openCursor(IDBKeyRange.bound(prefix, prefix + '￿')); q.onsuccess = () => { const c = q.result; if (c) { s.delete(c.key); c.continue(); } }; t.oncomplete = res; t.onerror = res; }); } catch (e) {} }
   };
   const KEY = `ipc|${PREFIX}|${revNum}|`;
   if (!RESUME) await IDB.clear('ipc|');
@@ -213,7 +221,7 @@
   const BODY = {msnPnFilters: {msnList: [], pnList: [], acTypes: acs.length ? acs : [type]}, highlightedContentsWords: []};
   const rowsOf = new Map();                                        // figür kimliği -> satırlar
   const figTodo = [];
-  figList.forEach(f => { const c = cache.get(KEY + 'fig|' + f.id); if (c) rowsOf.set(f.id, c); else figTodo.push(f); });
+  figList.forEach(f => { const c = cache.get(KEY + 'fig2|' + f.id); if (c) rowsOf.set(f.id, c); else figTodo.push(f); });
   phase = 'Figür'; total = figList.length; done = figList.length - figTodo.length;
   const figFail = [];
   await runPool(figTodo, async f => {
@@ -221,7 +229,7 @@
     const html = j && j.responseContent && j.responseContent.response;
     if (!html) { figFail.push(f.id); return; }
     const rows = parseFigure(html);
-    rowsOf.set(f.id, rows); await IDB.set(KEY + 'fig|' + f.id, rows); done++;
+    rowsOf.set(f.id, rows); await IDB.set(KEY + 'fig2|' + f.id, rows); done++;
   });
   if (figFail.length) console.warn(`${figFail.length} figür alınamadı (tekrar çalıştırınca denenir): ${figFail.slice(0, 5).join(', ')}...`);
 
@@ -261,16 +269,21 @@
   // ---- 5) Çıktıyı derle ve indir ----
   if (window.__stop) return console.warn('Durduruldu. Aynı kodu tekrar çalıştırırsanız kaldığı yerden devam eder.');
   const fmOf = ids => { const ix = ids.map(i => fidx.get(i)).filter(i => i != null); return ix.length >= fleet.length ? '*' : rangeStr(ix); };
-  const outFigs = [], outRows = [];
+  const outFigs = [], outRows = [], effs = [], effIx = new Map();
   figList.sort((a, b) => a.ref.localeCompare(b.ref) || a.id.localeCompare(b.id)).forEach(f => {
     const rows = rowsOf.get(f.id); if (!rows) return;
-    const fm = fmOf([...new Set(rows.flatMap(r => r.m))]);
+    const hasInfo = rows.some(r => r.info);
+    const fm = hasInfo ? fmOf([...new Set(rows.flatMap(r => r.m))]) : '*';
     const fi = outFigs.length;
     outFigs.push({id: f.id.slice(PREFIX.length + 3), ref: f.ref, name: f.name, zones: f.zones, app: f.app, fm: rows.length ? fm : '*', ch: f.ch});
     rows.forEach(r => {
-      const m = fmOf(r.m);
+      // satır uygulanabilirliği: '' = figürle aynı, '-' = filodaki hiçbir uçağa uygulanmaz, aksi halde indeks aralığı
+      let m = '';
+      if (r.info) { const x = fmOf(r.m); m = x === '' ? '-' : (x === fm ? '' : x); }
+      let ei = '';
+      if (r.eff) { if (!effIx.has(r.eff)) { effIx.set(r.eff, effs.length); effs.push(r.eff); } ei = effIx.get(r.eff); }
       const cm = r.pn ? (cmmOf.get(r.pn + '|' + r.vendor) || {}).c || [] : [];
-      outRows.push([fi, r.item, r.pn, r.vendor, r.nom, r.fin, r.qty, m === fm ? '' : m, [...new Set(cm.map(x => x.n))].join(',')]);
+      outRows.push([fi, r.item, r.pn, r.vendor, r.nom, r.fin, r.qty, m, [...new Set(cm.map(x => x.n))].join(','), ei]);
     });
   });
   const cmmSup = {};
@@ -285,9 +298,9 @@
     meta: {type, ac: acs, custo, revNum, revDate, prefix: PREFIX, exported: new Date().toISOString(),
       linkTemplate: `${O}/${seg}/document/${PREFIX}/toc?itemId=${PREFIX}_EN{ID}&itemType=DATAMODULE&wc=${wc}`,
       chapters: chapters.map(c => ({ch: c.ch, title: c.title})), sections,
-      cols: ['fig', 'item', 'pn', 'vendor', 'nom', 'fin', 'qty', 'm', 'cmm'], counts: {figures: outFigs.length, rows: outRows.length, parts: nPn, partsWithCmm: nCmm, treeFigures: figs.size, scanMinutes: +((Date.now() - t0) / 60000).toFixed(1)}},
+      cols: ['fig', 'item', 'pn', 'vendor', 'nom', 'fin', 'qty', 'm', 'cmm', 'eff'], counts: {figures: outFigs.length, rows: outRows.length, parts: nPn, partsWithCmm: nCmm, treeFigures: figs.size, scanMinutes: +((Date.now() - t0) / 60000).toFixed(1)}},
     fleet: fleet.map(f => ({reg: f.reg, fsn: f.fsn, msn: f.msn, eng: f.eng})),
-    figs: outFigs, rows: outRows, cmmSup
+    figs: outFigs, rows: outRows, effs, cmmSup
   };
   window.__ipc = data;
   const blob = new Blob([JSON.stringify(data)], {type: 'application/json'});
