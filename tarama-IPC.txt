@@ -28,7 +28,16 @@
     const out = [];
     let cur = null;                                                // son görülen "** ON A/C FSN 203-250" başlığı: {ids, txt}
     const ids = v => String(v || '').split(',').map(x => x.trim()).filter(Boolean);
+    // "Maintenance Figure": satırların kendi msn'i tüm filoyu gösterir; gerçek uygunluk "Installation context" uyarısındadır (.hiddenDiv içindeki tr[msn])
+    const maint = /Maintenance Figure/i.test(doc.body ? doc.body.textContent : html);
+    const ctx = {ids: [], txt: []};
+    if (maint) doc.querySelectorAll('.hiddenDiv tr[msn]').forEach(tr => {
+      ids(tr.getAttribute('msn')).forEach(i => { if (!ctx.ids.includes(i)) ctx.ids.push(i); });
+      tr.querySelectorAll('.applic-effect').forEach(e => { const t = clean(e.textContent).replace(/^\*+\s*/, '').replace(/^ON A\/C\s*/i, ''); if (t && !ctx.txt.includes(t)) ctx.txt.push(t); });
+    });
+    const ctxTxt = ctx.txt.length && ctx.txt.every(t => /^FSN\s/i.test(t)) ? 'FSN ' + ctx.txt.map(t => t.replace(/^FSN\s+/i, '')).join(', ') : ctx.txt.join(' | ');
     doc.querySelectorAll('table.aipcTable tr').forEach(r => {
+      if (r.closest('.hiddenDiv')) return;                         // açılır uyarı kutularının içindeki satırlar figür satırı değildir
       const ef = r.querySelector('.applic-effect, .effect .applic');
       if (ef && !r.id) {                                           // uygulanabilirlik başlık satırı: aşağıdaki satırlara uygulanır
         cur = {ids: ids(r.getAttribute('msn') || ef.getAttribute('adns-actable-popin')), txt: clean(ef.textContent).replace(/^\*+\s*/, '').replace(/^ON A\/C\s*/i, '')};
@@ -45,12 +54,13 @@
       const raw = clean(nd ? nd.textContent : c[2].textContent);
       const dots = /^\.+/.exec(raw);
       const own = ids(r.getAttribute('msn') || (r.closest('[msn]') ? r.closest('[msn]').getAttribute('msn') : ''));
-      const m = own.length ? own : (cur ? cur.ids : []);           // satırın kendi msn'i yoksa üstteki başlığınkini devral
+      let m = own.length ? own : (cur ? cur.ids : []);             // satırın kendi msn'i yoksa üstteki başlığınkini devral
+      if (maint) m = ctx.ids;                                      // Maintenance Figure: uygunluk Installation context'ten gelir (boşsa hiçbir uçağa uygulanmaz)
       out.push({
         item: r.id.replace(/^item_/, ''), pn, vendor,
         nom: raw.replace(/^\.+\s*/, ''), lv: dots ? dots[0].length : 0,
         fin: clean(c[3].textContent), qty: clean(c[4].textContent),
-        m, info: m.length > 0, eff: cur ? cur.txt : ''
+        m, info: maint || m.length > 0, eff: maint ? ctxTxt : (cur ? cur.txt : '')
       });
     });
     return out;
@@ -110,10 +120,10 @@
       r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => res(r.result); r.onerror = () => { this._d = null; rej(r.error); }; })); },
     async set(k, v) { try { const d = await this.open(); await new Promise(res => { const t = d.transaction('kv', 'readwrite'); t.objectStore('kv').put(v, k); t.oncomplete = res; t.onerror = res; }); } catch (e) {} },
     async all(prefix) { const out = new Map(); try { const d = await this.open();
-      await new Promise(res => { const q = d.transaction('kv').objectStore('kv').openCursor(IDBKeyRange.bound(prefix, prefix + '￿'));
+      await new Promise(res => { const q = d.transaction('kv').objectStore('kv').openCursor(IDBKeyRange.bound(prefix, prefix + ' '));
         q.onsuccess = () => { const c = q.result; if (c) { out.set(c.key, c.value); c.continue(); } else res(); }; q.onerror = () => res(); }); } catch (e) {} return out; },
     async clear(prefix) { try { const d = await this.open(); await new Promise(res => { const t = d.transaction('kv', 'readwrite'); const s = t.objectStore('kv');
-      const q = s.openCursor(IDBKeyRange.bound(prefix, prefix + '￿')); q.onsuccess = () => { const c = q.result; if (c) { s.delete(c.key); c.continue(); } }; t.oncomplete = res; t.onerror = res; }); } catch (e) {} }
+      const q = s.openCursor(IDBKeyRange.bound(prefix, prefix + ' ')); q.onsuccess = () => { const c = q.result; if (c) { s.delete(c.key); c.continue(); } }; t.oncomplete = res; t.onerror = res; }); } catch (e) {} }
   };
   const KEY = `ipc|${PREFIX}|${revNum}|`;
   if (!RESUME) await IDB.clear('ipc|');
@@ -225,7 +235,7 @@
   const BODY = {msnPnFilters: {msnList: [], pnList: [], acTypes: acs.length ? acs : [type]}, highlightedContentsWords: []};
   const rowsOf = new Map();                                        // figür kimliği -> satırlar
   const figTodo = [];
-  figList.forEach(f => { const c = cache.get(KEY + 'fig2|' + f.id); if (c) rowsOf.set(f.id, c); else figTodo.push(f); });
+  figList.forEach(f => { const c = cache.get(KEY + 'fig3|' + f.id); if (c) rowsOf.set(f.id, c); else figTodo.push(f); });
   phase = 'Figür'; total = figList.length; done = figList.length - figTodo.length;
   const figFail = [];
   await runPool(figTodo, async f => {
@@ -233,7 +243,7 @@
     const html = j && j.responseContent && j.responseContent.response;
     if (!html) { figFail.push(f.id); return; }
     const rows = parseFigure(html);
-    rowsOf.set(f.id, rows); await IDB.set(KEY + 'fig2|' + f.id, rows); done++;
+    rowsOf.set(f.id, rows); await IDB.set(KEY + 'fig3|' + f.id, rows); done++;
   });
   if (figFail.length) console.warn(`${figFail.length} figür alınamadı (tekrar çalıştırınca denenir): ${figFail.slice(0, 5).join(', ')}...`);
 
