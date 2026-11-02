@@ -15,7 +15,8 @@
   const DROP_DETAIL = true;   // true: ATA bölümünde (örn. 25-42) '... - INSTL' figürü varsa ve uygulanabilirliği kapsıyorsa, alt detay figürlerinin CMM'li satırlarını atar
   const FETCH_CMM = true;     // true: her parça için Numerical Index'ten CMM bilgisini de alır (parça başına 2 istek)
   const TYPE_OVERRIDE = '';   // boş: tip adresten okunur (A330, A32x ailesi 'A320'). Elle: örn. 'A330'
-  const RESUME = true;        // true: yarım kalan tarama aynı revizyonsa kaldığı yerden devam eder
+  const RESUME = true;        // true: kesilen tarama kaldığı yerden devam eder. Önbellek revizyon numarasına bağlıdır: yeni revizyonda tarama kendiliğinden sıfırdan başlar. Elle sıfırlamak için false yapın
+  const ALLOW_PARTIAL = false; // false: eksik figür/CMM kalırsa dosya İNDİRİLMEZ (eksik veri yüklenmesin diye); kodu tekrar çalıştırmanız yeterli
   const MAX_FIGS = 0;         // 0: sınırsız. DENEME için 30 yazın: yalnızca ilk 30 figürü tarar, dosya ipc_<TİP>_DENEME.json iner
   // ===================
 
@@ -95,6 +96,7 @@
   //#PARSERS-END
 
   const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const setAll = (arr, src) => { const t = Array.from(src); arr.length = 0; for (let i = 0; i < t.length; i++) arr.push(t[i]); };   // push(...büyükDizi) 'Maximum call stack' hatası verir
   const O = location.origin;
   const seg = location.pathname.split('/')[1];
   const PREFIX = (location.pathname.match(/\/document\/([^\/]+)\//) || [])[1];
@@ -120,10 +122,10 @@
       r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => res(r.result); r.onerror = () => { this._d = null; rej(r.error); }; })); },
     async set(k, v) { try { const d = await this.open(); await new Promise(res => { const t = d.transaction('kv', 'readwrite'); t.objectStore('kv').put(v, k); t.oncomplete = res; t.onerror = res; }); } catch (e) {} },
     async all(prefix) { const out = new Map(); try { const d = await this.open();
-      await new Promise(res => { const q = d.transaction('kv').objectStore('kv').openCursor(IDBKeyRange.bound(prefix, prefix + ' '));
+      await new Promise(res => { const q = d.transaction('kv').objectStore('kv').openCursor(IDBKeyRange.bound(prefix, prefix + '￿'));
         q.onsuccess = () => { const c = q.result; if (c) { out.set(c.key, c.value); c.continue(); } else res(); }; q.onerror = () => res(); }); } catch (e) {} return out; },
     async clear(prefix) { try { const d = await this.open(); await new Promise(res => { const t = d.transaction('kv', 'readwrite'); const s = t.objectStore('kv');
-      const q = s.openCursor(IDBKeyRange.bound(prefix, prefix + ' ')); q.onsuccess = () => { const c = q.result; if (c) { s.delete(c.key); c.continue(); } }; t.oncomplete = res; t.onerror = res; }); } catch (e) {} }
+      const q = s.openCursor(IDBKeyRange.bound(prefix, prefix + '￿')); q.onsuccess = () => { const c = q.result; if (c) { s.delete(c.key); c.continue(); } }; t.oncomplete = res; t.onerror = res; }); } catch (e) {} }
   };
   const KEY = `ipc|${PREFIX}|${revNum}|`;
   if (!RESUME) await IDB.clear('ipc|');
@@ -248,6 +250,7 @@
   if (figFail.length) console.warn(`${figFail.length} figür alınamadı (tekrar çalıştırınca denenir): ${figFail.slice(0, 5).join(', ')}...`);
 
   // ---- 4) CMM bilgisi (parça başına: arama -> PNR verisi) ----
+  let cmmMissing = 0;
   const cmmOf = new Map();                                         // "pn|vendor" -> {c:[{n,s}], ok:true/false}
   if (FETCH_CMM && !window.__stop) {
     const keys = new Set(), HW = new RegExp('^(SCREW|WASHER|NUT|BOLT|STUD|RIVET|PIN|COTTER|CLIP|CLAMP|BRACKET|SPACER|SHIM|GASKET|SEAL|O-RING|GROMMET|BUSHING|PACKING|RETAINER|DOUBLER|ANGLE|BUMPER|MATTRESS|CURTAIN|MATERIAL|LABEL|PLACARD|STRAP|TIE|INSERT|SLEEVE|STRIP|TAPE|ADHESIVE|SEALANT|RING|TURNBUTTON|HOOK|NIPPLE|ELBOW|TEE|UNION|SPRING|BEARING|BELT|CORD|LANYARD|FOAM|FELT|FILLER|FERRULE|CABLE-TIE)(?![A-Z])');
@@ -287,10 +290,14 @@
       }
       cmmOf.set(k, rec); await IDB.set(KEY + 'cmm|' + k, rec); done++;
     });
+    cmmMissing = todo.filter(k => !cmmOf.has(k)).length;
   }
 
   // ---- 5) Çıktıyı derle ve indir ----
   if (window.__stop) return console.warn('Durduruldu. Aynı kodu tekrar çalıştırırsanız kaldığı yerden devam eder.');
+  if (!ALLOW_PARTIAL && (figFail.length || tocFail.length || cmmMissing)) {
+    return console.error(`✖ Tarama eksik kaldı (alınamayan: ${figFail.length} figür, ${tocFail.length} ağaç düğümü, ${cmmMissing} CMM sorgusu). Dosya indirilmedi. Aynı kodu tekrar çalıştırın: yalnızca eksikler indirilir. Oturum düştüyse önce sayfayı yenileyip giriş yapın.`);
+  }
   const fmOf = ids => { const ix = ids.map(i => fidx.get(i)).filter(i => i != null); return ix.length >= fleet.length ? '*' : rangeStr(ix); };
   const outFigs = [], outRows = [], effs = [], effIx = new Map();
   figList.sort((a, b) => a.ref.localeCompare(b.ref) || a.id.localeCompare(b.id)).forEach(f => {
@@ -329,7 +336,7 @@
         if (ins.some(o => (o.r[9] === '' || effs[o.r[9]] === de) && ds.every((v, j) => !v || o.s[j]))) drop.add(i);
       });
     });
-    if (drop.size) { const keep = outRows.filter((r, i) => !drop.has(i)); outRows.length = 0; outRows.push(...keep); }
+    if (drop.size) { const keep = outRows.filter((r, i) => !drop.has(i)); setAll(outRows, keep); }
     console.log(`INSTL öncelikli eleme: ${drop.size} detay satırı atıldı.`);
   }
   if (SAVE_ONLY_CMM && FETCH_CMM) {                                // CMM'siz satırları, kullanılmayan figür ve uygulanabilirlik kayıtlarını at
@@ -341,7 +348,7 @@
       if (e !== '') { if (!eMap.has(e)) { eMap.set(e, effs2.length); effs2.push(effs[e]); } e = eMap.get(e); }
       rows2.push([fMap.get(r[0]), ...r.slice(1, 9), e]);
     });
-    outFigs.length = 0; outFigs.push(...figs2); effs.length = 0; effs.push(...effs2); outRows.length = 0; outRows.push(...rows2);
+    setAll(outFigs, figs2); setAll(effs, effs2); setAll(outRows, rows2);
   }
   const cmmSup = {};
   cmmOf.forEach(v => v.c.forEach(x => {                           // aynı CMM no birden çok tedarikçide olabilir: "A,B"
@@ -360,11 +367,14 @@
     figs: outFigs, rows: outRows, effs, cmmSup
   };
   window.__ipc = data;
-  const blob = new Blob([JSON.stringify(data)], {type: 'application/json'});
-  const a = document.createElement('a');
   const fname = `ipc_${type}${MAX_FIGS ? '_DENEME' : ''}.json`;
-  a.href = URL.createObjectURL(blob); a.download = fname;
-  document.body.appendChild(a); a.click(); a.remove();
+  const save = () => {
+    const blob = new Blob([JSON.stringify(data)], {type: 'application/json'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = fname;
+    document.body.appendChild(a); a.click(); a.remove();
+  };
+  window.__ipcSave = save;                                         // indirme engellenirse konsola  __ipcSave()  yazın
+  save();
   console.log(`%c✔ Bitti: ${fname} indi · ${outFigs.length} figür · ${outRows.length} satır · ${nPn} parça (${nCmm} tanesinin CMM'i var) · ${((Date.now() - t0) / 60000).toFixed(1)} dk`, 'font-weight:bold');
-  if (figFail.length || tocFail.length) console.warn('Eksik kalanlar var: kodu bir kez daha çalıştırın, sadece eksikleri indirir.');
 })();
