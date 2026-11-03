@@ -216,7 +216,7 @@
     </div>
 
     <script>
-        const IPC_FILES = ['ipc_A330.json'];          // yeni tipler eklendikçe buraya yazılır (ipc_A320.json, ipc_A350.json ...)
+        const IPC_FILES = ['ipc_A330.json', 'ipc_A350.json'];          // yeni tipler eklendikçe buraya yazılır (ipc_A320.json ...). Henüz yüklenmemiş dosyalar sessizce atlanır
         const RECENT_KEY = 'cmm_ipc_recent_v1';
         const REPORT_PAGE = 'bilgi-ekle.html';
         const CMM_LINK = 'https://ttdocs.thyteknik.com/documents/?q:document_chapter:icontains=';
@@ -250,10 +250,10 @@
         // ---------- Veri yükleme ----------
         async function loadAll() {
             const res = await Promise.all(IPC_FILES.map(async f => {
-                try { const r = await fetch(f, { cache: 'no-cache' }); if (!r.ok) throw new Error(r.status); return { f, d: await r.json() }; }
+                try { const r = await fetch(f, { cache: 'no-cache' }); if (r.status === 404) return { f, err: '404', missing: true }; if (!r.ok) throw new Error(r.status); return { f, d: await r.json() }; }
                 catch (e) { return { f, err: String(e.message || e) }; }
             }));
-            const bad = res.filter(x => x.err);
+            const bad = res.filter(x => x.err && !(x.missing && res.some(y => !y.err)));   // başka bir dosya yüklendiyse, henüz olmayan (404) dosya hata sayılmaz
             res.filter(x => !x.err).forEach(x => {
                 const d = x.d, ds = { file: x.f, meta: d.meta, fleet: d.fleet, figs: d.figs, rows: d.rows, effs: d.effs || [], cmmSup: d.cmmSup || {} };
                 S.sets.push(ds);
@@ -298,7 +298,7 @@
             }
             if (k.length >= 2 && !hits.length) { $('status').textContent = '"' + input.value.trim().toUpperCase() + '" filoda bulunamadı.'; box.hidden = true; return; }
             $('status').textContent = S.aircraft.length + ' uçak hazır';
-            box.innerHTML = hits.slice(0, 10).map(a => '<button type="button" class="chip" data-reg="' + esc(a.reg) + '">' + esc(a.reg) + '<small>' + esc(a.ds.meta.type) + ' · FSN ' + esc(a.fsn || '-') + '</small></button>').join('');
+            box.innerHTML = hits.slice(0, 10).map(a => '<button type="button" class="chip" data-reg="' + esc(a.reg) + '">' + esc(a.reg) + '<small>' + esc(a.ds.meta.type) + (a.fsn ? ' · FSN ' + esc(a.fsn) : ' · MSN ' + esc(a.msn || '-')) + '</small></button>').join('');
             box.hidden = !hits.length;
         }
         function selectAc(a, keepCh) {
@@ -309,7 +309,7 @@
             $('heroText').hidden = true; $('status').hidden = true; $('recent').hidden = true;
             const m = a.ds.meta;
             $('acBar').innerHTML =
-                '<span class="info-chip">Tip <b>' + esc(m.type) + '</b></span><span class="info-chip">FSN <b>' + esc(a.fsn || '-') + '</b></span>' +
+                '<span class="info-chip">Tip <b>' + esc(m.type) + '</b></span>' + (a.fsn ? '<span class="info-chip">FSN <b>' + esc(a.fsn) + '</b></span>' : '') +
                 '<span class="info-chip">MSN <b>' + esc(a.msn || '-') + '</b></span><span class="info-chip">Motor <b>' + esc(a.eng || '-') + '</b></span>' +
                 '<span class="info-chip">IPC <b>REV ' + esc(m.revNum) + '</b> · ' + esc(m.revDate) + '</span>';
             $('acBar').hidden = false;
