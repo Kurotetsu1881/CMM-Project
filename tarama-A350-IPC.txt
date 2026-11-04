@@ -1,0 +1,408 @@
+// ===== A350 IPC TARAMA KODU v1 (Line Maintenance içindeki IPC modülleri -> ipc_A350.json) · paralel, kaldığı yerden devam eder =====
+// A350'de IPC ayrı doküman değildir; "Line Maintenance" dokümanında 94A/94C bilgi kodlu görevlerdir.
+// Kullanım: airnavX'te A350 "Line Maintenance" dokümanında (herhangi bir sayfada; arama sayfası da olur, adreste /document/<kod>/ geçmesi yeter)
+// F12 > Console'a bu kodun tamamını yapıştırıp Enter'a basın. Sol altta durum bandı çıkar; bittiğinde "ipc_A350.json" otomatik iner.
+// Kod yalnızca SİZİN oturumunuzda, SİZİN yetkinizle ve sadece okuma istekleri yapar (içindekiler, IPC görevi içeriği, parça verisi).
+// Durdurmak için: window.__stop = true   (sonra aynı kodu tekrar çalıştırırsanız kaldığı yerden devam eder)
+(async () => {
+  // ===== AYARLAR =====
+  const CHAPTERS = 'ALL';    // örn. ['25','52'] ya da tümü için 'ALL'. Önce DENEME dosyasını çalıştırmanız önerilir.
+  const INFO = ['94A', '94C']; // taranacak IPC bilgi kodları (94A: kurulum/IPD, 94C: yapısal onarım parçaları)
+  const MAX_CONC = 24;        // otomatik hızlanmanın üst sınırı (kod sunucu sorunsuzsa 2'şer artırır, hata görürse yarıya indirir)
+  const CONCURRENCY = 10;     // başlangıçtaki eşzamanlı istek sayısı
+  const SKIP_STD = true;      // true: standart bağlantı elemanlarını (NAS/MS/AN... cıvata, somun, pul) CMM sorgusundan çıkarır
+  const SKIP_HW = true;       // true: adı SCREW/WASHER/NUT/SEAL/BRACKET... gibi küçük donanım olan parçaları CMM sorgusundan çıkarır
+  const SKIP_AIRBUS = true;   // true: vendor kodu FAPE3 (Airbus'ın kendi ürettiği yapısal parça/kanal/ankraj) olan parçaları CMM sorgusundan çıkarır; bunların CMM'i olmaz
+  const SKIP_NOFLEET = true;  // true: filomuzdaki hiçbir uçağa uygulanmayan görev/parçaları atlar
+  const SAVE_ONLY_CMM = true; // true: dosyaya yalnızca CMM'i olan satırları yazar (GitHub 25 MB sınırının altında kalır)
+  const FETCH_CMM = true;     // true: her parça için Numerical Index'ten CMM bilgisini alır
+  const RESUME = true;        // true: kesilen tarama kaldığı yerden devam eder (önbellek revizyona bağlıdır; yeni revizyonda kendiliğinden sıfırdan başlar)
+  const ALLOW_PARTIAL = false; // false: eksik görev/CMM kalırsa dosya İNDİRİLMEZ; kodu tekrar çalıştırmanız yeterli
+  const MAX_FIGS = 0;         // 0: sınırsız. DENEME için 30 yazın: yalnızca ilk 30 IPC görevini tarar, dosya ipc_A350_DENEME.json iner
+  const ONLY_DMS = [];        // TEŞHİS: dolu ise bu metinlerden birini içeren IPC görevleri de taranır (örn. ['25-31-11-04000-94AA']). MAX_FIGS=0 ile birlikte yalnızca bunlar taranır
+  // ===================
+  const DIAG = !!(MAX_FIGS || ONLY_DMS.length);   // teşhis modu: CMM'siz satırlar da dosyaya yazılır ve her satırın neden elendiği/alındığı belirtilir
+
+  //#PARSERS-BEGIN
+  const clean = s => String(s || '').replace(/\s+/g, ' ').trim();
+  const VEND = /^(.*?)\s*\(([^()]+)\)\s*$/;                       // "X00407-0-069-00 (K3996)" -> parça no + vendor
+  const idList = v => String(v || '').split(',').map(x => x.trim()).filter(Boolean);
+  // IPC görevi (S1000D) HTML'inden parça satırları. Dönüş: {rows:[{item,pn,vendor,nom,lv,fin,qty,m:[P-kimlikleri],info}], dmIds, dmAll, zones}
+  const parseDm = html => {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const res = {rows: [], dmIds: [], dmAll: false, zones: ''};
+    const apTd = doc.querySelector('table.dmStatusInformationTable td.applic') || doc.querySelector('td.applic');   // görev düzeyi uygulanabilirlik
+    if (apTd) {
+      apTd.querySelectorAll('[adns-actable-popin]').forEach(e => idList(e.getAttribute('adns-actable-popin')).forEach(i => { if (!res.dmIds.includes(i)) res.dmIds.push(i); }));
+      res.dmAll = /MSN\s+ALL\b/i.test(apTd.textContent);
+    }
+    const z0 = doc.querySelector('table.ipdTable thead th.cell-header');
+    if (z0) res.zones = [...new Set([...z0.querySelectorAll('adns-link span.link')].map(s => clean(s.textContent)).filter(Boolean))].join(', ');
+    const qtyCol = new Map();
+    let curTable = null, cur = null;                               // son görülen "ON A/C MSN ..." başlık satırı (aşağıdaki satırlara uygulanır)
+    doc.querySelectorAll('table.ipdTable tr').forEach(r => {
+      if (r.closest('.hiddenDiv')) return;                         // açılır kutuların içindeki satırlar parça satırı değildir
+      const tb = r.closest('table.ipdTable');
+      if (tb !== curTable) { curTable = tb; cur = null; }
+      const isItem = r.classList.contains('topRow-IPD');
+      if (!isItem) {
+        const ef = r.querySelector('.applic-effect, .applic-effect-csdb');
+        if (ef) cur = idList(r.getAttribute('msn') || ef.getAttribute('adns-actable-popin'));
+        return;
+      }
+      if (!r.cells || r.cells.length < 4) return;
+      if (!qtyCol.has(tb)) { const th = tb.querySelector('thead'); qtyCol.set(tb, !!th && /UNIT PER ASSY/i.test(th.textContent)); }
+      const c = r.cells;
+      const l0 = c[0].querySelector('adns-link span.link');
+      const item = clean(l0 ? l0.textContent : (c[0].firstChild ? c[0].firstChild.textContent : ''));
+      const link = c[1].querySelector('adns-link[adns-link-type="SEARCH"][adns-target-id]') || c[1].querySelector('adns-link[adns-target-id]');
+      let pn = '', vendor = '';
+      const tid = link ? clean(link.getAttribute('adns-target-id')) : clean(c[1].textContent);
+      const vm = VEND.exec(tid); if (vm) { pn = vm[1]; vendor = vm[2]; } else pn = tid;
+      let t = '';
+      for (const n of c[2].childNodes) { if (n.nodeType === 3) t += n.textContent; else if (n.nodeType === 1 && /^(SPAN|B|I|U|SUB|SUP|FONT)$/.test(n.tagName)) t += n.textContent; else if (n.nodeType === 1) break; }
+      let raw = clean(t).split(/R\/I|\bSEE\b/)[0];
+      if (!raw) raw = clean(c[2].textContent).split(/R\/I|\bSEE\b/)[0];
+      raw = clean(raw);
+      const dots = /^\.+/.exec(raw);
+      const own = idList(r.getAttribute('msn'));
+      const m = own.length ? own : (cur && cur.length ? cur : (res.dmAll ? [] : res.dmIds));
+      res.rows.push({item, pn, vendor, nom: raw.replace(/^\.+\s*/, '').slice(0, 90), lv: dots ? dots[0].length : 0, fin: clean(c[3].textContent).slice(0, 80), qty: qtyCol.get(tb) && c[4] ? clean(c[4].textContent) : '', m, info: m.length > 0});
+    });
+    return res;
+  };
+  // PNR (Numerical Index) HTML'inden CMM listesi: [{n:'25-74-39', s:'K3996'}]  ("Maintenance Manual" sütunu: "CMM 25-74-39 (K3996)" ya da "ACMM 29-13-39 (93835)")
+  const parseCmm = html => {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const out = [], seen = new Set();
+    const t = doc.querySelector('.partSpec table') || doc.querySelector('table');
+    if (!t) return out;
+    const ths = [...t.querySelectorAll('thead td, thead th')];
+    const ix = ths.findIndex(x => /Maintenance Manual/i.test(x.textContent));
+    [...t.querySelectorAll('tr')].filter(r => !r.closest('thead') && r.cells && r.cells.length > Math.max(ix, 0)).forEach(r => {
+      const txt = clean((ix >= 0 ? r.cells[ix] : r).textContent);
+      for (const m of txt.matchAll(/\bA?CMM\s+([0-9A-Za-z][0-9A-Za-z\-\/\.]*?)(?=\s*\(|\s*A?CMM\b|\s*[,;]|\s*$)\s*(?:\(([^)]*)\))?/g)) {   // ACMM (özet CMM) de CMM sayılır
+        const k = m[1] + '|' + (m[2] || '');
+        if (!seen.has(k)) { seen.add(k); out.push({n: m[1], s: clean(m[2] || '')}); }
+      }
+    });
+    return out;
+  };
+  const rangeStr = idx => {                                        // [0,1,2,5] -> "0-2,5"
+    const a = [...new Set(idx)].sort((x, y) => x - y), out = [];
+    for (let i = 0; i < a.length;) { let j = i; while (j + 1 < a.length && a[j + 1] === a[j] + 1) j++; out.push(j > i ? a[i] + '-' + a[j] : '' + a[i]); i = j + 1; }
+    return out.join(',');
+  };
+  //#PARSERS-END
+
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const setAll = (arr, src) => { const t = Array.from(src); arr.length = 0; for (let i = 0; i < t.length; i++) arr.push(t[i]); };   // push(...büyükDizi) 'Maximum call stack' hatası verir
+
+  const O = location.origin;
+  const seg = location.pathname.split('/')[1];
+  const PREFIX = (location.href.match(/\/document\/([^\/?#]+)/) || [])[1];
+  if (!PREFIX) return console.error('airnavX doküman sayfasında değilsiniz (adreste /document/<kod>/ yok). A350 Line Maintenance dokümanını açıp tekrar deneyin.');
+  const A = `${O}/${seg}/api`;
+  const wc = new URL(location.href).searchParams.get('wc') || 'actype:A350;customization:THY;doctype:Line Maintenance';
+  const acs = [...wc.matchAll(/actype:([A-Za-z0-9]+)/gi)].map(m => m[1].toUpperCase());
+  const custo = (/customization:([A-Za-z0-9]+)/i.exec(wc) || [])[1] || 'THY';
+  const type = (acs[0] || 'A350').replace(/[^A-Z0-9]/g, '');
+  if (type !== 'A350') console.warn('Uyarı: bu kod A350 içindir; adresteki tip: ' + type);
+
+  // Revizyon: sayfa başlığından ("Line Maintenance - A350 - THY - Rev. num: 063 - 01-Nov-2026 ...")
+  const rm = /Rev\.?\s*num:?\s*(\d+)\s*-\s*(\d{1,2}-[A-Za-z]{3}-\d{4})/i.exec(document.title);
+  const revNum = rm ? rm[1] : '', revDate = rm ? rm[2] : '';
+  if (!revNum) return console.error('Revizyon numarası sayfa başlığında bulunamadı: ' + document.title);
+  const band = document.createElement('div');
+  band.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:2147483647;background:#c00;color:#fff;font:bold 14px sans-serif;padding:8px 12px;border-radius:6px;max-width:80vw';
+  band.textContent = 'A350 IPC TARAMA BAŞLADI... (sekmeyi kapatmayın)'; document.body.appendChild(band);
+  console.log(`%cA350 IPC · REV:${revNum} · ${revDate} · önek: ${PREFIX} · chapter: ${CHAPTERS === 'ALL' ? 'TÜMÜ' : CHAPTERS.join(',')} · bilgi kodları: ${INFO.join(',')}`, 'font-weight:bold');
+
+  // ---- devam etme için küçük IndexedDB deposu ----
+  const IDB = {
+    open() { return this._d || (this._d = new Promise((res, rej) => { const r = indexedDB.open('ipcscan', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => res(r.result); r.onerror = () => { this._d = null; rej(r.error); }; })); },
+    async set(k, v) { try { const d = await this.open(); await new Promise(res => { const t = d.transaction('kv', 'readwrite'); t.objectStore('kv').put(v, k); t.oncomplete = res; t.onerror = res; }); } catch (e) {} },
+    async all(prefix) { const out = new Map(); try { const d = await this.open();
+      await new Promise(res => { const q = d.transaction('kv').objectStore('kv').openCursor(IDBKeyRange.bound(prefix, prefix + '￿'));
+        q.onsuccess = () => { const c = q.result; if (c) { out.set(c.key, c.value); c.continue(); } else res(); }; q.onerror = () => res(); }); } catch (e) {} return out; },
+    async clear(prefix) { try { const d = await this.open(); await new Promise(res => { const t = d.transaction('kv', 'readwrite'); const s = t.objectStore('kv');
+      const q = s.openCursor(IDBKeyRange.bound(prefix, prefix + '￿')); q.onsuccess = () => { const c = q.result; if (c) { s.delete(c.key); c.continue(); } }; t.oncomplete = res; t.onerror = res; }); } catch (e) {} }
+  };
+  const KEY = `ipc|${PREFIX}|${revNum}|`;
+  if (!RESUME) await IDB.clear('ipc|');
+  const cache = RESUME ? await IDB.all(KEY) : new Map();
+  if (cache.size) console.log(`Önceki taramadan ${cache.size} kayıt hazır, tekrar indirilmeyecek.`);
+
+  // ---- istek katmanı: 404 -> {notFound}; 429/5xx/ağ hatası -> bekleyip yeniden dener ----
+  let nReq = 0, nErr = 0, pauseUntil = 0, lastSlow = 0, consecFail = 0, limit = CONCURRENCY, lastDown = 0, errMark = 0;
+  window.__stop = false;
+  const call = async (method, url, body) => {
+    for (let k = 0; k < 5; k++) {
+      if (window.__stop) return null;
+      const w = pauseUntil - Date.now(); if (w > 0) await sleep(w);
+      try {
+        nReq++;
+        const opt = {method, credentials: 'include', headers: {Accept: 'application/json, text/plain, */*'}};
+        if (method === 'POST') { opt.headers['Content-Type'] = 'application/json;charset=utf-8'; opt.body = JSON.stringify(body || {}); }
+        const r = await fetch(url, opt);
+        if (r.status === 404) { consecFail = 0; return {notFound: true}; }
+        if (r.status === 429 || r.status >= 500) {
+          const ra = +r.headers.get('retry-after') || 0;
+          if (Date.now() - lastSlow > 3000) { lastSlow = Date.now(); lastDown = lastSlow; limit = Math.max(4, Math.floor(limit / 2)); pauseUntil = Math.max(pauseUntil, Date.now() + Math.max(ra * 1000, 1500)); }
+          throw new Error(r.status);
+        }
+        if (!r.ok) throw new Error(r.status);
+        const j = JSON.parse(await r.text());                      // oturum düşmüşse HTML döner -> burada hata verir
+        consecFail = 0; return j;
+      } catch (e) { nErr++; await sleep(400 * (k + 1)); }
+    }
+    if (++consecFail >= 25) { window.__stop = true; console.error('Art arda çok hata: oturum süresi dolmuş olabilir. Sayfayı yenileyip (gerekirse tekrar giriş yapıp) kodu yeniden çalıştırın; kaldığı yerden devam eder.'); }
+    return null;
+  };
+  const runPool = async (items, fn) => {
+    let i = 0;
+    const worker = async id => {
+      while (!window.__stop) {
+        if (i >= items.length) return;
+        if (id >= limit) { await sleep(250); continue; }
+        const k = i++; if (k >= items.length) return;
+        await fn(items[k], k); report();
+      }
+    };
+    await Promise.all(Array.from({length: MAX_CONC}, (_, id) => worker(id)));
+  };
+  let lastLog = 0, phase = '', total = 0, done = 0;
+  const t0 = Date.now();
+  const report = () => {
+    if (Date.now() - lastLog < 5000) return; lastLog = Date.now();
+    if (nErr === errMark && Date.now() - lastDown > 10000 && limit < MAX_CONC) limit = Math.min(MAX_CONC, limit + 2); errMark = nErr;
+    band.textContent = `A350 IPC · ${phase}: ${done}/${total} (durdurmak için konsola  window.__stop = true)`;
+    console.log(`${phase}: ${done}/${total} · istek ${nReq} (${(nReq / ((Date.now() - t0) / 1000)).toFixed(1)}/sn) · hata ${nErr} · paralel ${limit}`);
+  };
+
+
+  // ---- 1) Filo (kuyruk -> MSN/motor) ----
+  const bind = encodeURIComponent(JSON.stringify({actype: acs.length ? acs : [type], customization: [custo]}));
+  const fj = await call('GET', `${A}/filter/getFilter?filterType=tailNumber&maxResults=2000&msnBinding=${bind}&revId=${PREFIX}&searchFilter=&searchMode=document.toc`);
+  if (!fj || !fj.results) return console.error('Filo (getFilter) alınamadı.');
+  if (fj.nbResults > fj.results.length) console.warn(`Filo eksik geldi: ${fj.results.length}/${fj.nbResults}`);
+  const fleet = fj.results.map(x => {
+    const p = String((x.aircraftDetail || [''])[0]).split(' - ').map(s => s.trim());      // "TC-LGA - TRENTXWB-84"
+    return {id: x.id, reg: p[0] || '', fsn: null, eng: p.slice(1).join(' - '), msn: x.msn || ''};
+  }).sort((a, b) => a.msn.localeCompare(b.msn));
+  const fidx = new Map(fleet.map((f, i) => [f.id, i]));
+  const fleetMsn = new Set(fleet.map(f => parseInt(f.msn, 10)).filter(n => n > 0));
+  console.log(`Filo: ${fleet.length} uçak`);
+
+  // ---- 2) Chapter kökleri ve IPC görevlerinin (94A/94C) bulunması ----
+  const rootJ = await call('GET', `${A}/toc/${PREFIX}/getRootToc`);
+  if (!rootJ || !rootJ.childTocItems) return console.error('Kök içindekiler (getRootToc) alınamadı.');
+  const chOf = c => (/^(\d\d)\s+-\s+/.exec(c.title || '') || [])[1] || '';
+  const chapters = rootJ.childTocItems.filter(c => c.id && chOf(c)).map(c => ({id: c.id, ch: chOf(c), title: clean(c.title)}))
+    .filter(c => CHAPTERS === 'ALL' || CHAPTERS.includes(c.ch)).sort((a, b) => a.ch.localeCompare(b.ch));
+  if (!chapters.length) return console.error('İstenen chapter kökte bulunamadı. Kökteki başlıklar: ' + rootJ.childTocItems.map(c => c.title).join(' | '));
+  const TOC = `${A}/toc/${PREFIX}/getTocItems?id=`;
+  const DMID = new RegExp('_(A350-[A-Z]-(\\d{2})-(\\d{2})-(\\d{2})-([0-9A-Z]{5})-(' + INFO.join('|') + ')[0-9A-Z]-[0-9A-Z])$', 'i');
+  const figs = new Map(), sections = {}, tocFail = [];
+  const addSol = s => {
+    if (!s || typeof s !== 'object') return;
+    const m = s.id ? DMID.exec(String(s.id)) : null;
+    if (m && !figs.has(s.id)) {
+      const name = clean(s.title).replace(/^A350-\S+\s+-\s+/i, '');
+      if (!/^DELETED$/i.test(name)) figs.set(s.id, {id: s.id, ch: m[2], ref: `${m[2]}-${m[3]}-${m[4]}-${m[5].slice(0, 2)}`, name, tocApp: clean(s.applicability)});
+    }
+    (s.solutions || []).forEach(addSol);
+  };
+  const collect = (o, d = 0) => {                                  // listBusinessCategory[].solutions / listSolutions: yapı ne olursa olsun görev kayıtlarını bulur
+    if (!o || typeof o !== 'object' || d > 6) return;
+    if (Array.isArray(o)) { o.forEach(x => collect(x, d + 1)); return; }
+    if (o.id && DMID.test(String(o.id))) { addSol(o); return; }
+    Object.entries(o).forEach(([k, v]) => { if (k !== 'childTocItems') collect(v, d + 1); });
+  };
+  for (const c of chapters) {
+    phase = `Ağaç ${c.ch}`; total = 1; done = 0;
+    const seen = new Set([c.id]);
+    let level = [c.id];
+    while (level.length && !window.__stop) {
+      const next = [];
+      await runPool(level, async id => {
+        const j = await call('GET', TOC + encodeURIComponent(id));
+        if (!j || j.notFound) { if (id !== c.id) tocFail.push(id); return; }
+        (j.childTocItems || []).forEach(k => {
+          if (!k.id) return;
+          if (DMID.test(String(k.id))) { addSol(k); return; }
+          if (seen.has(k.id)) return; seen.add(k.id); next.push(k.id);
+          const lv = String(k.id).slice(PREFIX.length + 1).split('_');          // "25_3_1_" -> ['25','3','1','']
+          if (/^\d\d$/.test(lv[0]) && /^\w$/.test(lv[1] || '') && /^\w$/.test(lv[2] || '') && !lv[3]) sections[`${lv[0]}-${lv[1]}${lv[2]}`] = clean(k.title).replace(/^[0-9A-Za-z\-]+\s+-\s+/, '');
+        });
+        collect(j.listSolutions); collect(j.listBusinessCategory);
+        done++; total = done + next.length;
+      });
+      level = next;
+    }
+    console.log(`✔ Chapter ${c.ch}: ${[...figs.values()].filter(f => f.ch === c.ch).length} IPC görevi`);
+  }
+  if (tocFail.length) console.warn(`${tocFail.length} ağaç düğümü alınamadı (tekrar çalıştırınca denenir).`);
+  let figList = [...figs.values()];
+  if (SKIP_NOFLEET) {                                              // TOC'daki "ON A/C MSN ..." metni filomuzdan hiçbir uçağı içermiyorsa görevi indirme
+    const before = figList.length;
+    figList = figList.filter(f => {
+      const t = f.tocApp;
+      if (!t || /ALL/i.test(t) || /\.\.\./.test(t) || /\d\s*-\s*\d/.test(t)) return true;
+      const ns = (t.match(/\d{3,5}/g) || []).map(Number);
+      return !ns.length || ns.some(n => fleetMsn.has(n));
+    });
+    if (before !== figList.length) console.log(`${before - figList.length} IPC görevi filomuza uygulanmadığı için atlandı.`);
+  }
+  console.log(`Toplam ${figList.length} IPC görevi bulundu.` + (MAX_FIGS && figList.length > MAX_FIGS ? ` DENEME: araya yayılmış ${MAX_FIGS} tanesi taranacak.` : '') + ' İçerikler indiriliyor...');
+  if (DIAG) {                                                      // seçilmiş görevler (ONLY_DMS) + araya yayılmış örnek
+    figList.sort((x, y) => x.id.localeCompare(y.id));               // TOC taraması eşzamanlı olduğundan sıra değişebilir; örnek her seferinde aynı olsun
+    const pin = figList.filter(f => ONLY_DMS.some(x => f.id.includes(x)));
+    const rest = figList.filter(f => !pin.includes(f));
+    const want = MAX_FIGS ? Math.max(0, MAX_FIGS - pin.length) : 0;
+    const st = want ? Math.ceil(rest.length / want) : 1;
+    figList = pin.concat(want ? rest.filter((_, i) => i % st === 0).slice(0, want) : []);
+    console.log(`TEŞHİS: ${figList.length} görev taranacak (${pin.length} tanesi ONLY_DMS ile seçildi):`, figList.map(f => f.id.slice(PREFIX.length + 5)).join(', '));
+  }
+
+  // ---- 3) IPC görev içerikleri (parça satırları) ----
+  const BODY = {msnPnFilters: {msnList: [], pnList: [], acTypes: acs.length ? acs : [type]}, highlightedContentsWords: []};
+  const dmOf = new Map();                                          // görev kimliği -> {rows, dmIds, dmAll, zones}
+  const figTodo = [];
+  figList.forEach(f => { const c = cache.get(KEY + 'dm1|' + f.id); if (c) dmOf.set(f.id, c); else figTodo.push(f); });
+  phase = 'IPC görevi'; total = figList.length; done = figList.length - figTodo.length;
+  const figFail = [];
+  await runPool(figTodo, async f => {
+    const j = await call('POST', `${A}/dataModule/content?dataModuleId=${encodeURIComponent(f.id)}&forHatch=false&forPrint=false`, BODY);
+    const html = j && j.responseContent && j.responseContent.response;
+    let p;
+    if (html) p = parseDm(html);
+    else if (j && j.notFound) p = {rows: [], dmIds: [], dmAll: false, zones: ''};        // sunucuda olmayan görev: boş say, taramayı tıkamasın
+    else { figFail.push(f.id); return; }
+    dmOf.set(f.id, p); await IDB.set(KEY + 'dm1|' + f.id, p); done++;
+  });
+  if (figFail.length) console.warn(`${figFail.length} görev alınamadı (tekrar çalıştırınca denenir): ${figFail.slice(0, 5).join(', ')}...`);
+
+  // ---- 4) CMM bilgisi (parça başına: PNR verisi; kimlik tahmini tutmazsa arama) ----
+  let cmmMissing = 0;
+  const skipWhy = new Map();                                       // "pn|vendor" -> neden CMM sorgulanmadı (nofleet/hw/std)
+  const cmmOf = new Map();                                         // "pn|vendor" -> {c:[{n,s}], ok:true}
+  if (FETCH_CMM && !window.__stop) {
+    const keys = new Set(), HW = new RegExp('^(SCREW|WASHER|NUT|BOLT|STUD|RIVET|PIN|COTTER|CLIP|CLAMP|BRACKET|SPACER|SHIM|GASKET|SEAL|O-RING|GROMMET|BUSHING|PACKING|RETAINER|DOUBLER|ANGLE|BUMPER|MATTRESS|CURTAIN|MATERIAL|LABEL|PLACARD|STRAP|TIE|INSERT|SLEEVE|STRIP|TAPE|ADHESIVE|SEALANT|RING|TURNBUTTON|HOOK|NIPPLE|ELBOW|TEE|UNION|SPRING|BEARING|BELT|CORD|LANYARD|FOAM|FELT|FILLER|FERRULE|CABLE-TIE)(?![A-Z])');
+    const used = new Map();                                        // anahtar -> en az bir satırı filomuza uygulanıyor mu / donanım mı
+    dmOf.forEach(p => p.rows.forEach(r => {
+      if (!r.pn) return;
+      const k = r.pn + '|' + r.vendor, inFleet = !r.info || r.m.some(i => fidx.has(i)), hw = HW.test(String(r.nom || '').toUpperCase());
+      const u = used.get(k) || {fleet: false, hw: true};
+      u.fleet = u.fleet || inFleet; u.hw = u.hw && hw; used.set(k, u);
+    }));
+    let nHw = 0, nNoFleet = 0, nAir = 0;
+    used.forEach((u, k) => { if (SKIP_NOFLEET && !u.fleet) { nNoFleet++; skipWhy.set(k, 'nofleet'); } else if (SKIP_AIRBUS && k.endsWith('|FAPE3')) { nAir++; skipWhy.set(k, 'airbus'); } else if (SKIP_HW && u.hw) { nHw++; skipWhy.set(k, 'hw'); } else keys.add(k); });
+    if (nHw || nNoFleet || nAir) console.log(`CMM sorgusundan çıkarılan: ${nHw} küçük donanım, ${nAir} Airbus (FAPE3) yapısal parça, ${nNoFleet} filoya uygulanmayan parça.`);
+    const todo = [];
+    const STD = /^(ABS|NAS|MS|AN|EN|LN|NSA|DIN|ISO|BACB|BACN|BACS|BACW|BACR|BACC|ASNA|ESNA|HST|TAN|SPS)\d/i;
+    let nStd = 0;
+    keys.forEach(k => { const c = cache.get(KEY + 'cmm3|' + k); if (c) cmmOf.set(k, c); else if (SKIP_STD && STD.test(k.split('|')[0])) { nStd++; skipWhy.set(k, 'std'); } else todo.push(k); });
+    if (nStd) console.log(`${nStd} standart bağlantı elemanı CMM sorgusundan çıkarıldı.`);
+    phase = 'CMM'; total = keys.size - nStd; done = total - todo.length;
+    console.log(`${keys.size} farklı parça, ${todo.length} tanesi için CMM sorgulanacak...`);
+    const pick = (results, pn, vendor) => {
+      const cirs = (results || []).filter(x => x.contentType === 'CIR' && x.cirId);
+      const want = vendor ? `${pn}-${vendor}` : pn;
+      const exact = cirs.find(x => (x.cirCodes || [x.cirCode]).some(c => clean(c) === want));
+      return (exact || cirs.find(x => clean(x.cirCode) === pn) || {}).cirId || null;
+    };
+    const post = cir => call('POST', `${A}/cir/pnrdata_ipc/fragment?cirId=${encodeURIComponent(cir)}&customization=${encodeURIComponent(custo)}&forHatch=false`, BODY);
+    const htmlOf = j => (j && j.responseContent && j.responseContent.response) || null;
+    let guessOn = true, gTry = 0, gMiss = 0;
+    const cmmHow = new Map();                                      // "pn|vendor" -> tahmin | arama | cir-yok
+    window.__cmmHow = cmmHow;
+    await runPool(todo, async k => {
+      const [pn, vendor] = k.split('|');
+      const guess = `${PREFIX}_${pn}${vendor}_FAPE3`;               // cirId: <önek>_<parça no><vendor>_<üretici>
+      const valid = h => !!h && h.toUpperCase().includes(pn.toUpperCase());   // yanıt gerçekten bu parçanın kaydı mı? (yanlış kimlik boş/başka sayfa dönebilir)
+      let html = null, how = 'tahmin';
+      if (guessOn) {
+        const h = htmlOf(await post(guess)); gTry++;
+        if (valid(h)) html = h; else gMiss++;
+        if (gTry >= 30 && gMiss / gTry > 0.3) { guessOn = false; console.warn('Kimlik tahmini çoğu zaman tutmuyor; arama yöntemine geçildi.'); }
+      }
+      if (!html) {
+        how = 'arama';
+        const sj = await call('GET', `${A}/viewer/searchDocument?aggregationList=ata2&aggregationList=actype&aggregationList=customization&aggregationList=doctypebc&page=1&q=${encodeURIComponent(vendor ? `${pn} (${vendor})` : pn)}&queryWithAggregation=false&revItemId=${PREFIX}&wc=${encodeURIComponent(wc)}`);
+        if (!sj) return;                                           // geçici hata: kaydetme, sonra tekrar denenir
+        const cir = pick(sj.results, pn, vendor);
+        if (cir) { const g2 = await post(cir); if (g2 === null) return; const h = htmlOf(g2); if (valid(h)) html = h; }
+        if (!html) how = 'cir-yok';                                // arama da kayıt bulamadı: CMM bilgisi alınamadı (CMM yok demek değildir)
+      }
+      const rec = {c: html ? parseCmm(html) : [], ok: true, how};
+      cmmHow.set(k, how);
+      cmmOf.set(k, rec); await IDB.set(KEY + 'cmm3|' + k, rec); done++;
+    });
+    cmmMissing = todo.filter(k => !cmmOf.has(k)).length;
+  }
+
+  // ---- 5) Çıktıyı derle ve indir ----
+  if (window.__stop) { band.textContent = 'Durduruldu. Aynı kodu tekrar çalıştırırsanız kaldığı yerden devam eder.'; return console.warn('Durduruldu. Aynı kodu tekrar çalıştırırsanız kaldığı yerden devam eder.'); }
+  if (!ALLOW_PARTIAL && (figFail.length || tocFail.length || cmmMissing)) {
+    band.textContent = 'Tarama eksik kaldı: kodu tekrar çalıştırın (yalnızca eksikler indirilir).';
+    return console.error(`✖ Tarama eksik kaldı (alınamayan: ${figFail.length} görev, ${tocFail.length} ağaç düğümü, ${cmmMissing} CMM sorgusu). Dosya indirilmedi. Aynı kodu tekrar çalıştırın: yalnızca eksikler indirilir. Oturum düştüyse önce sayfayı yenileyin.`);
+  }
+  const fmOf = ids => { const ix = ids.map(i => fidx.get(i)).filter(i => i != null); return ix.length >= fleet.length ? '*' : rangeStr(ix); };
+  const outFigs = [], outRows = [], diag = new Map();
+  figList.sort((a, b) => a.ref.localeCompare(b.ref) || a.id.localeCompare(b.id)).forEach(f => {
+    const p = dmOf.get(f.id); if (!p) return;
+    const rows = p.rows;
+    const fm = (!rows.length || rows.some(r => !r.info)) ? '*' : fmOf([...new Set(rows.flatMap(r => r.m))]);   // figür düzeyi uygulanabilirlik (filo indeksleri)
+    const fi = outFigs.length;
+    outFigs.push({id: f.id.slice(PREFIX.length + 1), ref: f.ref, name: f.name, zones: p.zones, app: '', fm, ch: f.ch});
+    rows.forEach(r => {
+      // satır uygulanabilirliği: '' = figürle aynı, '-' = filodaki hiçbir uçağa uygulanmaz, aksi halde indeks aralığı
+      let m = '';
+      if (r.info) { const x = fmOf(r.m); m = x === '' ? '-' : (x === fm ? '' : x); }
+      const key = r.pn + '|' + r.vendor, cm = r.pn ? (cmmOf.get(key) || {}).c || [] : [];
+      const row = [fi, r.item, r.pn, r.vendor, r.nom, r.fin, r.qty, m, [...new Set(cm.map(x => x.n))].join(','), ''];
+      if (DIAG) { const w = !r.pn ? 'pn-yok' : (skipWhy.get(key) || (cm.length ? 'cmm-var' : (((cmmOf.get(key) || {}).how === 'cir-yok') ? 'cir-yok' : 'cmm-yok'))); row.push(w); diag.set(f.id, diag.get(f.id) || {id: f.id.slice(PREFIX.length + 1), ad: f.name, satir: 0}); const d = diag.get(f.id); d.satir++; d[w] = (d[w] || 0) + 1; }
+      outRows.push(row);
+    });
+  });
+  if (SAVE_ONLY_CMM && FETCH_CMM && !DIAG) {                       // CMM'siz satırları ve kullanılmayan figürleri at
+    const fMap = new Map(), figs2 = [], rows2 = [];
+    outRows.forEach(r => {
+      if (!r[8]) return;
+      if (!fMap.has(r[0])) { fMap.set(r[0], figs2.length); figs2.push(outFigs[r[0]]); }
+      rows2.push([fMap.get(r[0]), ...r.slice(1)]);
+    });
+    setAll(outFigs, figs2); setAll(outRows, rows2);
+  }
+  const cmmSup = {};
+  cmmOf.forEach(v => v.c.forEach(x => {                           // aynı CMM no birden çok tedarikçide olabilir: "A,B"
+    const a = cmmSup[x.n] ? cmmSup[x.n].split(',') : [];
+    if (x.s && !a.includes(x.s)) a.push(x.s);
+    cmmSup[x.n] = a.join(',');
+  }));
+  const nPn = new Set(outRows.map(r => r[2] + '|' + r[3])).size;
+  const nCmm = new Set(outRows.filter(r => r[8]).map(r => r[2] + '|' + r[3])).size;
+  const data = {
+    meta: {type, ac: acs, custo, revNum, revDate, prefix: PREFIX, exported: new Date().toISOString(),
+      linkTemplate: `${O}/${seg}/document/${PREFIX}/toc?itemId=${PREFIX}_{ID}&itemType=DATAMODULE&wc=${wc.replace(/ /g, '%20')}`,
+      chapters: chapters.map(c => ({ch: c.ch, title: c.title})), sections,
+      cols: ['fig', 'item', 'pn', 'vendor', 'nom', 'fin', 'qty', 'm', 'cmm', 'eff'], counts: {figures: outFigs.length, rows: outRows.length, parts: nPn, partsWithCmm: nCmm, treeFigures: figs.size, scanMinutes: +((Date.now() - t0) / 60000).toFixed(1)}, onlyCmm: !!(SAVE_ONLY_CMM && FETCH_CMM && !DIAG), ...(DIAG ? {diag: [...diag.values()]} : {})},
+    fleet: fleet.map(f => ({reg: f.reg, fsn: f.fsn, msn: f.msn, eng: f.eng})),
+    figs: outFigs, rows: outRows, effs: [], cmmSup
+  };
+  window.__ipc = data;
+  const fname = `ipc_${type}${DIAG ? '_DENEME' : ''}.json`;
+  if (DIAG) { console.log('TEŞHİS özeti (görev başına satır sayıları; nofleet=filomuza uygulanmıyor, hw/std=küçük donanım/standart parça, cmm-yok=CMM bulunamadı):'); console.table([...diag.values()]); }
+  const save = () => {
+    const blob = new Blob([JSON.stringify(data)], {type: 'application/json'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = fname;
+    document.body.appendChild(a); a.click(); a.remove();
+  };
+  window.__ipcSave = save;                                         // indirme engellenirse konsola  __ipcSave()  yazın
+  save();
+  band.style.background = '#070'; band.textContent = `✔ Bitti: ${fname} indi (${outRows.length} satır, ${nPn} parça, ${((Date.now() - t0) / 60000).toFixed(1)} dk)`;
+  console.log(`%c✔ Bitti: ${fname} indi · ${outFigs.length} IPC görevi · ${outRows.length} satır · ${nPn} parça (${nCmm} tanesinin CMM'i var) · ${((Date.now() - t0) / 60000).toFixed(1)} dk`, 'font-weight:bold');
+})();
