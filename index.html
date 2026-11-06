@@ -373,9 +373,9 @@
             // 2. geçiş: INSTL varsa o bölümde alt detay figürlerine bakma; aynı P/N + vendor + CMM'i bir kez göster
             const seen = new Map(), out = [];
             for (const r of cand) {
-                const f = ds.figs[r[0]];
-                if (!figIns[r[0]] && insSec.has(f.ref.slice(0, 5))) continue;
-                const key = r[2] + '|' + r[3] + '|' + r[8];
+                const f = ds.figs[r[0]], ek = /^ek-/.test(f.id);   // ek-… : veri.csv'den eklenen kayıtlar, her zaman gösterilir ve IPC kayıtlarıyla birleştirilmez
+                if (!ek && !figIns[r[0]] && insSec.has(f.ref.slice(0, 5))) continue;
+                const key = (ek ? 'ek|' + r[4] + '|' : '') + r[2] + '|' + r[3] + '|' + r[8];
                 const hit = seen.get(key);
                 if (hit) {
                     if (hit.refs.length < 6 && !hit.refs.some(x => x.id === f.id)) hit.refs.push(f);
