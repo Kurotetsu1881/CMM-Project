@@ -1,5 +1,5 @@
-// ===== BOEING 777 IPC TARAMA KODU v1 (Toolbox AIPC -> ipc_B777.json) · paralel, kaldığı yerden devam eder =====
-// Kullanım: toolbox.boeing.com'da 777 AIPC belgesini (örn. D633W111-THY-xxxx) DocumentViewer'da açın (herhangi bir figür açık olsun).
+// ===== BOEING 777-200/300 IPC TARAMA KODU (Toolbox AIPC -> ipc_B777.json) · paralel, kaldığı yerden devam eder =====
+// Kullanım: toolbox.boeing.com'da 777-200/300 AIPC belgesini (D633W111-THY-xxxx) DocumentViewer'da açın (herhangi bir figür açık olsun).
 // F12 > Console'a bu kodun tamamını yapıştırıp Enter'a basın. Sol altta durum bandı çıkar; bittiğinde "ipc_B777.json" otomatik iner.
 // Kod yalnızca SİZİN oturumunuzda, SİZİN yetkinizle ve sadece okuma istekleri yapar (içindekiler, figür tablosu, parça kayıtları, uçak kaydı).
 // Durdurmak için: window.__stop = true   (sonra aynı kodu tekrar çalıştırırsanız kaldığı yerden devam eder)
@@ -7,6 +7,7 @@
   // ===== AYARLAR =====
   const TYPE = 'B777';
   const ENGINE = 'GE90-100 SERIES';
+  const ENGINE_OF = {};        // isteğe bağlı: {'MSN': 'motor'} (tipte birden çok motor varsa)
   const FLEET_MSN = [40707, 40708, 40791, 40792, 40709, 40710, 40711, 40793, 40794, 40795, 40796, 40797, 44116, 44117, 44118, 60401, 44119, 44120, 44122, 44121, 44124, 44123, 44125, 44126, 44127, 44128, 44129, 44130, 60405, 60402, 41818, 41819, 42097, 60403, 60404, 65742, 65743, 65744, 66578, 66579, 66580, 35783, 32729, 32714, 70425, 70426, 70427, 70424];  // filo dosyasındaki 777 MSN'leri
   const CHAPTERS = 'ALL';     // örn. ['25','52'] ya da tümü için 'ALL'
   const MAX_CONC = 16;        // otomatik hızlanmanın üst sınırı (sunucu sorunsuzsa 2'şer artırır, hata görürse yarıya indirir)
@@ -15,7 +16,7 @@
   const SAVE_ONLY_CMM = true; // true: dosyaya yalnızca CMM'i olan satırları yazar
   const RESUME = true;        // true: kesilen tarama kaldığı yerden devam eder (önbellek belge sürümüne bağlıdır)
   const ALLOW_PARTIAL = false; // false: eksik figür kalırsa dosya İNDİRİLMEZ; kodu tekrar çalıştırmanız yeterli
-  const MAX_FIGS = 0;         // 0: sınırsız. DENEME için 30 yazın: yalnızca ilk 30 figürü tarar, dosya ipc_B777_DENEME.json iner (CMM'siz satırlar da yazılır)
+  const MAX_FIGS = 0;         // 0: sınırsız. DENEME için 40 yazın: yalnızca ilk 40 figürü tarar, dosya ipc_<TİP>_DENEME.json iner (CMM'siz satırlar da yazılır)
   // ===================
   const DIAG = !!MAX_FIGS;
   const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -130,7 +131,7 @@
   });
   const fleet = [...byReg.values()].filter(a => a.reg).sort((a, b) => (parseInt(a.cec, 10) || 1e9) - (parseInt(b.cec, 10) || 1e9) || a.msn.localeCompare(b.msn));
   if (!fleet.length) return fail('Filo çözülemedi (findAirplaneBySerialNumber sonuç vermedi).');
-  const fidx = new Map(fleet.map((f, i) => [f.id, i]));
+  let fidx = new Map(fleet.map((f, i) => [f.id, i]));
   console.log(`Filo: ${fleet.length} uçak`);
 
   // ---- 2) İçindekiler: bölümleri aç, figürleri topla ----
@@ -144,7 +145,7 @@
     const ns = flat(j).filter(n => n.dataUnitId).map(nodeOf); IDB.set(ck, ns); return ns;
   };
   const chOk = k => CHAPTERS === 'ALL' || CHAPTERS.includes(k.slice(0, 2));
-  const all = new Map(), expanded = new Set(), tocFail = [];
+  const all = new Map(), expanded = new Set(), tocFail = [], dropped = [];
   const add = ns => ns.forEach(n => { if (!all.has(n.du)) all.set(n.du, n); });
   phase = 'içindekiler';
   let top = await tree('');
@@ -170,6 +171,15 @@
   chapters.sort((a, b) => a.ch.localeCompare(b.ch));
   let figs = [...all.values()].filter(n => n.mt === 'figure' && /^\d\d-/.test(n.key) && chOk(n.key));
   const nTree = figs.length;
+  if (CHAPTERS === 'ALL') {                                        // belgenin geçerlilik listesinde olmayan uçakları (başka model/belge) filodan çıkar
+    const U = new Set(); all.forEach(n => n.ids && n.ids.forEach(i => U.add(String(i))));
+    if (U.size) {
+      const out = fleet.filter(f => !U.has(f.id)), keep = fleet.filter(f => U.has(f.id));
+      if (!keep.length) return fail('Filodaki hiçbir uçak bu belgenin geçerlilik listesinde yok. Doğru belge açık mı? (TYPE ve FLEET_MSN ayarlarını kontrol edin)');
+      if (out.length) console.warn(`Bu belgede geçerli olmayan ${out.length} uçak filodan çıkarıldı: ${out.map(f => f.reg).join(', ')}`);
+      setAll(fleet, keep); fidx = new Map(fleet.map((f, i) => [f.id, i])); dropped.push(...out.map(f => f.reg));
+    }
+  }
   if (SKIP_NOFLEET) figs = figs.filter(n => !n.ids || n.ids.some(i => fidx.has(String(i))));
   figs.sort((a, b) => a.key.localeCompare(b.key));
   if (MAX_FIGS) { const step = Math.max(1, Math.floor(figs.length / MAX_FIGS)); figs = figs.filter((_, i) => i % step === 0).slice(0, MAX_FIGS); }
@@ -179,7 +189,7 @@
   const typeSeen = {};
   const walk = (o, f, d = 0) => { if (!o || typeof o !== 'object' || d > 12) return; f(o); (Array.isArray(o) ? o : Object.values(o)).forEach(v => walk(v, f, d + 1)); };
   const doFig = async n => {
-    const ck = KEY + (DIAG ? 'fgD2|' : 'fg2|') + n.du, hit = cache.get(ck);
+    const ck = KEY + (DIAG ? 'fgD3|' : 'fg3|') + n.du, hit = cache.get(ck);
     if (hit) { res.set(n.du, hit); return; }
     const meta = await call(`${O}/productv2read/contentObject/primaryContentObjectByDataUnitAndProductInstanceId/${pi}/dataUnit/${n.du}/contentRefType/DISPLAYABLE`);
     if (!meta) { figFail.push(n.key); return; }
@@ -229,7 +239,7 @@
             if (!uniq.length && !DIAG) return;
             const k = kwd.get('k' + p.v.toLowerCase() + p.pn.toLowerCase()) || '';
             const ids = app.get(p.id);
-            r.rows.push({item: p.item, pn: p.pn, v: p.v, nom: k ? (p.adt ? k + ' - ' + p.adt : k) : p.adt, fin: p.fin, qty: p.qty, ids: ids ? [...ids] : null, cmm: uniq, flag: uniq.length ? 'cmm-var' : (p.hasCmm ? 'cmm-cozulemedi' : 'cmm-yok')});
+            r.rows.push({item: p.item, pn: p.pn, v: p.v, nom: k ? (p.adt ? k + ' - ' + p.adt : k) : p.adt, fin: p.fin, qty: p.qty, ids: ids ? [...ids] : null, cmm: uniq, flag: (uniq.length ? 'cmm-var' : (p.hasCmm ? 'cmm-cozulemedi' : 'cmm-yok'))});
           });
         }
       }
@@ -278,8 +288,8 @@
       linkTemplate: `${O}/webui/DocumentViewer;productNumber=${PN};issueDate=${ISS};productFormat=XML;revisionState=PUBLISHED;location={ID};cirType={ID}`,
       chapters, sections, cols: ['fig', 'item', 'pn', 'vendor', 'nom', 'fin', 'qty', 'm', 'cmm', 'eff'],
       counts: {figures: figsOut.length, rows: rowsOut.length, parts: nPn, partsWithCmm: nCmm, treeFigures: nTree, scanMinutes: +((Date.now() - t0) / 60000).toFixed(1)}, onlyCmm: !DIAG,
-      ...(DIAG ? {diag: {cmmTypes: typeSeen, unresolved: unres, missMsn: miss}} : {})},
-    fleet: fleet.map(f => ({reg: f.reg, fsn: null, msn: f.msn, eng: ENGINE, cec: f.cec})),
+      ...(DIAG ? {diag: {cmmTypes: typeSeen, unresolved: unres, missMsn: miss, notInDoc: dropped}} : {})},
+    fleet: fleet.map(f => ({reg: f.reg, fsn: null, msn: f.msn, eng: ENGINE_OF[f.msn] || ENGINE, cec: f.cec})),
     figs: figsOut, rows: rowsOut, effs: [], cmmSup
   };
   window.__ipc = data;

@@ -44,7 +44,9 @@
             border: 1px solid rgba(148, 163, 184, 0.4); border-radius: 10px; min-width: 0;
         }
         .fld:focus { outline: none; border-color: #ef4444; }
-        select.fld { max-width: 100%; }
+        select.fld { max-width: 100%; text-overflow: ellipsis; }
+        #chSel { flex: 0 0 250px; width: 250px; }
+        #secSel { flex: 0 0 270px; width: 270px; }
         #inputWrap { position: relative; width: 100%; }
         #clearBtn { position: absolute; right: 2px; top: 2px; width: 44px; height: 44px; font-size: 26px; line-height: 1; color: #cbd5e1; background: transparent; border: 0; cursor: pointer; }
         #clearBtn:hover { color: #ffffff; }
@@ -104,6 +106,7 @@
         .no-cmm { color: #6b7280; }
         .tag { display: inline-block; margin-left: 6px; padding: 0 6px; font-size: 10px; font-weight: 600; color: #9ca3af; border: 1px solid rgba(148, 163, 184, 0.3); border-radius: 6px; vertical-align: middle; }
 
+        @media (min-width: 641px) { .cmm-col { text-align: center; } }
         @media (max-width: 640px) {
             #headWrap { display: none; }
             #dataTable, #dataTable tbody, #dataTable tr, #dataTable td { display: block; width: 100%; }
@@ -190,16 +193,16 @@
             <div id="tableContainer" class="table-wrap flex-grow flex flex-col min-h-0 rounded-2xl shadow-xl overflow-hidden">
                 <div id="headWrap" class="head-bar flex-shrink-0">
                     <table class="w-full text-left border-collapse table-fixed">
-                        <colgroup><col style="width: 36%"><col style="width: 22%"><col style="width: 13%"><col style="width: 21%"><col style="width: 70px"></colgroup>
+                        <colgroup><col style="width: 33%"><col style="width: 21%"><col style="width: 13%"><col style="width: 23%"><col style="width: 70px"></colgroup>
                         <thead class="text-xs uppercase tracking-wider"><tr>
                             <th class="px-3.5 py-3.5 font-semibold">Lokasyon</th><th class="px-3.5 py-3.5 font-semibold">Parça numarası</th>
-                            <th class="px-3.5 py-3.5 font-semibold">Vendor code</th><th class="px-3.5 py-3.5 font-semibold">CMM</th><th class="px-2 py-3.5 text-center font-semibold">İşlem</th>
+                            <th class="px-3.5 py-3.5 font-semibold">Vendor code</th><th class="px-3.5 py-3.5 font-semibold cmm-col">CMM</th><th class="px-2 py-3.5 text-center font-semibold">İşlem</th>
                         </tr></thead>
                     </table>
                 </div>
                 <div id="bodyScroll" class="body-scroll overflow-y-auto flex-grow min-h-0">
                     <table id="dataTable" class="w-full text-left border-collapse table-fixed">
-                        <colgroup><col style="width: 36%"><col style="width: 22%"><col style="width: 13%"><col style="width: 21%"><col style="width: 70px"></colgroup>
+                        <colgroup><col style="width: 33%"><col style="width: 21%"><col style="width: 13%"><col style="width: 23%"><col style="width: 70px"></colgroup>
                         <tbody id="tableBody" class="divide-y divide-gray-700 divide-opacity-30 text-xs sm:text-sm text-gray-300"></tbody>
                     </table>
                     <div id="moreWrap" class="p-3 text-center" hidden><button type="button" id="moreBtn" class="btn-ghost"></button></div>
@@ -210,7 +213,7 @@
 
         <!-- Alt Bilgi -->
         <div class="flex-shrink-0 mt-2 text-xs text-gray-400 px-2 flex justify-between items-center gap-3">
-            <span id="footInfo" class="truncate">IPC verisi yükleniyor...</span>
+            <span id="footInfo" class="truncate"></span>
             <span class="flex-shrink-0">CMM Finder IPC v1.0</span>
         </div>
     </div>
@@ -244,7 +247,7 @@
             }
             return false;
         }
-        const fmtCmm = n => /^\d{6}$/.test(n) ? n.slice(0, 2) + '-' + n.slice(2, 4) + '-' + n.slice(4) : n;
+        const fmtCmm = n => /^\d{6,}$/.test(n) ? n.slice(0, 2) + '-' + n.slice(2, 4) + '-' + n.slice(4) : n;   // 2535755 -> 25-35-755
         const chName = t => String(t).replace(/^\S+\s+-\s+/, '');
 
         // ---------- Veri yükleme ----------
@@ -270,7 +273,7 @@
             S.loaded = true;
             S.aircraft.sort((a, b) => a.reg.localeCompare(b.reg));
             $('status').textContent = tr(S.aircraft.length) + ' uçak hazır';
-            $('footInfo').textContent = S.sets.map(s => s.meta.type + ' IPC · REV ' + s.meta.revNum + ' · ' + s.meta.revDate + ' · ' + tr(s.meta.counts.parts) + ' parça').join('   |   ');
+            $('footInfo').textContent = '';
             loadRecent(); renderRecent();
             applyUrl();
             suggest();
@@ -310,8 +313,7 @@
             const m = a.ds.meta;
             $('acBar').innerHTML =
                 '<span class="info-chip">Tip <b>' + esc(m.type) + '</b></span>' + (a.fsn ? '<span class="info-chip">FSN <b>' + esc(a.fsn) + '</b></span>' : '') +
-                '<span class="info-chip">MSN <b>' + esc(a.msn || '-') + '</b></span><span class="info-chip">Motor <b>' + esc(a.eng || '-') + '</b></span>' +
-                '<span class="info-chip">IPC <b>REV ' + esc(m.revNum) + '</b> · ' + esc(m.revDate) + '</span>';
+                '<span class="info-chip">MSN <b>' + esc(a.msn || '-') + '</b></span><span class="info-chip">Motor <b>' + esc(a.eng || '-') + '</b></span>';
             $('acBar').hidden = false;
             buildBase();
             showChapters();
@@ -347,6 +349,12 @@
             }
             return false;
         }
+        // "MODULE ASSY - LAV" -> "MODULE ASSY - LAV (1F-2L)": lavabo konumu figür adından ("... , 1F-2L LAV") alınır
+        function lavName(nom, figName) {
+            if (!/\bLAV\s*$/i.test(nom) || /\(/.test(nom)) return nom;
+            const m = /(?:^|[\s,])(\d[A-Z]-(?:\d[A-Z]|[A-Z]{2}))\s+LAV\b/i.exec(figName || '');
+            return m ? nom + ' (' + m[1].toUpperCase() + ')' : nom;
+        }
         function buildBase() {
             const a = S.ac, ds = a.ds, figOk = ds.figs.map(f => inSet(f.fm, a.idx));
             const effOk = (ds.effs || []).map(t => fsnOk(t, +a.fsn));
@@ -374,7 +382,7 @@
                     if (r[5] && !hit.fins.includes(r[5])) hit.fins.push(r[5]);
                     hit.n++; continue;
                 }
-                const o = { ch: f.ch, sec: f.ref.slice(0, 5), pn: r[2], vendor: r[3], nom: r[4] || f.name, fin: r[5], fins: r[5] ? [r[5]] : [], cmm: r[8] ? r[8].split(',') : [], refs: [f], fig: f, item: r[1], n: 1, eff: (ds.effs && r[9] !== '' && r[9] != null) ? ds.effs[r[9]] : '' };
+                const o = { ch: f.ch, sec: f.ref.slice(0, 5), pn: r[2], vendor: r[3], nom: lavName(r[4] || f.name, f.name), fin: r[5], fins: r[5] ? [r[5]] : [], cmm: r[8] ? r[8].split(',') : [], refs: [f], fig: f, item: r[1], n: 1, eff: (ds.effs && r[9] !== '' && r[9] != null) ? ds.effs[r[9]] : '' };
                 seen.set(key, o); out.push(o);
             }
             out.forEach(o => { o.search = norm([o.pn, o.vendor, o.nom, o.fins.join(' '), o.cmm.map(fmtCmm).join(' '), o.fig.ref, o.fig.name].join(' ')); });
@@ -446,7 +454,7 @@
                 '<td class="px-3.5 py-3 cell-loc align-top" data-label="Lokasyon"><span class="wrap"><span class="loc-main">' + esc(o.nom) + '</span><span class="loc-sub">' + sub.join(' · ') + more + '</span></span></td>' +
                 '<td class="px-3.5 py-3 align-top" data-label="Parça no"><span class="pn">' + esc(o.pn) + '</span>' + (o.fins.length ? '<span class="fin">FIN ' + esc(o.fins.slice(0, 3).join(', ')) + (o.fins.length > 3 ? ' +' + (o.fins.length - 3) : '') + '</span>' : '') + '</td>' +
                 '<td class="px-3.5 py-3 align-top" data-label="Vendor">' + esc(o.vendor || '-') + '</td>' +
-                '<td class="px-3.5 py-3 align-top" data-label="CMM">' + cmm + '</td>' +
+                '<td class="px-3.5 py-3 align-top cmm-col" data-label="CMM">' + cmm + '</td>' +
                 '<td class="px-2 py-3 text-center cell-act align-top"><a href="' + esc(reportUrl(o)) + '" class="icon-btn edit-link" title="Hatalı / eksik bildir" aria-label="Hatalı / eksik bildir">' + EDIT_ICON + '<span class="edit-txt">Hatalı / eksik bildir</span></a></td></tr>';
         }
         function syncHead() {                                         // kaydırma çubuğu genişliği kadar başlık tablosunu daralt: sütunlar hizalı kalsın
