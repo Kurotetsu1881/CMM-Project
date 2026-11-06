@@ -219,7 +219,7 @@
     </div>
 
     <script>
-        const IPC_FILES = ['ipc_A320.json', 'ipc_A330.json', 'ipc_A350.json', 'ipc_B737.json', 'ipc_B777.json'];   // yeni tipler buraya eklenir. Klasörde henüz olmayan (404) dosyalar sessizce atlanır
+        const IPC_FILES = ['ipc_A320.json', 'ipc_A330.json', 'ipc_A350.json', 'ipc_B737.json', 'ipc_B737MAX.json', 'ipc_B777.json'];   // yeni tipler buraya eklenir. Klasörde henüz olmayan (404) dosyalar sessizce atlanır
         const RECENT_KEY = 'cmm_ipc_recent_v1';
         const REPORT_PAGE = 'bilgi-ekle.html';
         const CMM_LINK = 'https://ttdocs.thyteknik.com/documents/?q:document_chapter:icontains=';
@@ -247,7 +247,7 @@
             }
             return false;
         }
-        const fmtCmm = n => /^\d{6,}$/.test(n) ? n.slice(0, 2) + '-' + n.slice(2, 4) + '-' + n.slice(4) : n;   // 2535755 -> 25-35-755
+        const fmtCmm = n => /^\d{6,}[A-Z]?$/.test(n) ? n.slice(0, 2) + '-' + n.slice(2, 4) + '-' + n.slice(4) : n;   // 2535755 -> 25-35-755
         const chName = t => String(t).replace(/^\S+\s+-\s+/, '');
 
         // ---------- Veri yükleme ----------
