@@ -431,7 +431,7 @@
             return REPORT_PAGE + '?' + p.toString();
         }
         function figLink(f) {
-            const t = S.ac.ds.meta.linkTemplate;
+            const t = /^ek-/.test(f.id) ? '' : S.ac.ds.meta.linkTemplate;   // ek-… figürleri IPC'de yok (veri.csv'den eklendi)
             const a = esc(f.ref);
             return t ? '<a href="' + esc(t.replace('{ID}', f.id)) + '" target="_blank" rel="noopener noreferrer" title="Airbus IPC\'de aç">FIG ' + a + '</a>' : 'FIG ' + a;
         }
