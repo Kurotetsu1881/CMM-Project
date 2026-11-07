@@ -250,6 +250,31 @@
         const fmtCmm = n => /^\d{6,}[A-Z]?$/.test(n) ? n.slice(0, 2) + '-' + n.slice(2, 4) + '-' + n.slice(4) : n;   // 2535755 -> 25-35-755
         const chName = t => String(t).replace(/^\S+\s+-\s+/, '');
 
+        // veri_ek.json: [nom, pn, cmm, "TC-XXX,TC-YYY"] kayıtlarını ilgili tipin 25-31 (GALLEYS) bölümüne ekler; IPC'de aynı P/N + CMM zaten varsa o uçak için eklemez
+        function applyEk(ds, list) {
+            const regIdx = new Map(ds.fleet.map((a, i) => [a.reg, i])), n = ds.fleet.length;
+            const npn = x => String(x).toUpperCase().replace(/[^A-Z0-9]/g, '');
+            const figOk = ds.figs.map(f => ds.fleet.map((_, i) => inSet(f.fm, i)));
+            const have = new Set(), vend = new Map();
+            for (const r of ds.rows) {
+                const k = npn(r[2]); if (r[3] && !vend.has(k)) vend.set(k, r[3]);
+                if (!r[8]) continue;
+                for (let i = 0; i < n; i++) if (figOk[r[0]][i] && inSet(r[7] || ds.figs[r[0]].fm, i)) for (const c of r[8].split(',')) have.add(i + '|' + k + '|' + c);
+            }
+            const rows = [], all = new Set();
+            for (const [nom, pn, cmm, regs] of list) {
+                const idx = regs.split(',').map(x => regIdx.get(x)).filter(i => i != null && !have.has(i + '|' + npn(pn) + '|' + cmm));
+                if (!idx.length) continue;
+                idx.forEach(i => all.add(i)); rows.push([nom, pn, cmm, idx]);
+            }
+            if (!rows.length) return;
+            const rng = a => { a = [...a].sort((x, y) => x - y); const o = []; for (let i = 0; i < a.length;) { let j = i; while (j + 1 < a.length && a[j + 1] === a[j] + 1) j++; o.push(j > i ? a[i] + '-' + a[j] : '' + a[i]); i = j + 1; } return o.join(','); };
+            ds.figs.push({ id: 'ek-veri-25-31', ref: '25-31-EK', name: 'GALLEY - ek kayıtlar', zones: '', app: 'EK', fm: rng(all), ch: '25' });
+            const fi = ds.figs.length - 1;
+            rows.forEach((r, k) => { ds.rows.push([fi, String(k + 1).padStart(3, '0'), r[1], vend.get(npn(r[1])) || '', r[0], '', '', rng(r[3]), r[2], '']); if (!ds.cmmSup[r[2]]) ds.cmmSup[r[2]] = ''; });
+            if (!ds.meta.sections['25-31']) ds.meta.sections['25-31'] = 'GALLEYS';
+        }
+
         // ---------- Veri yükleme ----------
         async function loadAll() {
             const res = await Promise.all(IPC_FILES.map(async f => {
@@ -257,8 +282,10 @@
                 catch (e) { return { f, err: String(e.message || e) }; }
             }));
             const bad = res.filter(x => x.err && !(x.missing && res.some(y => !y.err)));   // başka bir dosya yüklendiyse, henüz olmayan (404) dosya hata sayılmaz
+            let EK = {}; try { const r = await fetch('veri_ek.json', { cache: 'no-cache' }); if (r.ok) EK = await r.json(); } catch (e) {}   // isteğe bağlı: IPC'de CMM'i olmayan galley kayıtları (veri_ek_uret.py)
             res.filter(x => !x.err).forEach(x => {
                 const d = x.d, ds = { file: x.f, meta: d.meta, fleet: d.fleet, figs: d.figs, rows: d.rows, effs: d.effs || [], cmmSup: d.cmmSup || {} };
+                if (EK[ds.meta.type]) applyEk(ds, EK[ds.meta.type]);
                 S.sets.push(ds);
                 d.fleet.forEach((a, i) => S.aircraft.push({ reg: a.reg, key: nk(a.reg), fsn: a.fsn, msn: a.msn, eng: a.eng, ds, idx: i }));
             });
@@ -375,7 +402,7 @@
             for (const r of cand) {
                 const f = ds.figs[r[0]], ek = /^ek-/.test(f.id);   // ek-… : veri.csv'den eklenen kayıtlar, her zaman gösterilir ve IPC kayıtlarıyla birleştirilmez
                 if (!ek && !figIns[r[0]] && insSec.has(f.ref.slice(0, 5))) continue;
-                const key = (ek ? 'ek|' + r[4] + '|' : '') + r[2] + '|' + r[3] + '|' + r[8];
+                const key = f.ref.slice(0, 5) + '|' + (ek ? 'ek|' + r[4] + '|' : '') + r[2] + '|' + r[3] + '|' + r[8];   // aynı parça her ATA bölümünde ayrı listelenir (yoksa en küçük figür numaralı bölümde, örn. 11-32'de görünür, 25-40'ta kaybolur)
                 const hit = seen.get(key);
                 if (hit) {
                     if (hit.refs.length < 6 && !hit.refs.some(x => x.id === f.id)) hit.refs.push(f);
