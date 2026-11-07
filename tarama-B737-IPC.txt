@@ -11,7 +11,7 @@
   const REG_OF = {"29765": "TC-JFC", "29766": "TC-JFD", "29767": "TC-JFE", "29768": "TC-JFF", "29769": "TC-JFG", "29770": "TC-JFH", "29772": "TC-JFJ", "29773": "TC-JFK", "29774": "TC-JFL", "29775": "TC-JFM", "29776": "TC-JFN", "29777": "TC-JFO", "29778": "TC-JFP", "29779": "TC-JFR", "29780": "TC-JFT", "29781": "TC-JFU", "29783": "TC-JFY", "29784": "TC-JFZ", "29787": "TC-JGC", "29789": "TC-JGE", "40319": "TC-JZV", "40316": "TC-JZU", "39027": "TC-JZO", "34415": "TC-JGR", "34416": "TC-JGS", "34417": "TC-JGT", "34418": "TC-JGU", "34419": "TC-JGV", "35738": "TC-JGY", "35739": "TC-JGZ", "35740": "TC-JHA", "35741": "TC-JHB", "35742": "TC-JHC", "35743": "TC-JHD", "35744": "TC-JHE", "35745": "TC-JHF", "39026": "TC-JZN", "40975": "TC-JHK", "40976": "TC-JHL", "40980": "TC-JHM", "40981": "TC-JHN", "40987": "TC-JHO", "42000": "TC-JHP", "40989": "TC-JHR", "40991": "TC-JHS", "42001": "TC-JHT", "42002": "TC-JHU", "40992": "TC-JHV", "42003": "TC-JHY", "42004": "TC-JHZ", "40988": "TC-JVA", "40990": "TC-JVB", "42005": "TC-JVC", "42007": "TC-JVD", "42006": "TC-JVE", "42008": "TC-JVF", "42009": "TC-JVG", "60012": "TC-JVH", "60013": "TC-JVI", "60015": "TC-JVJ", "60014": "TC-JVK", "60017": "TC-JVL", "60016": "TC-JVM", "60018": "TC-JVN", "60031": "TC-JVO", "60019": "TC-JVP", "60030": "TC-JVR", "60021": "TC-JVS", "60020": "TC-JVT", "60022": "TC-JVU", "60023": "TC-JVV", "60024": "TC-JVY", "60025": "TC-JVZ", "60026": "TC-JZE", "41805": "TC-JKU", "41808": "TC-JKV", "39030": "TC-JZR", "39031": "TC-JZS", "39032": "TC-JZT", "60176": "TC-JZZ", "32736": "TC-JKY", "34300": "TC-JKO", "32419": "TC-SAF", "32420": "TC-SAG", "40973": "TC-JYA", "40974": "TC-JYB", "40977": "TC-JYC", "40978": "TC-JYD", "40979": "TC-JYE", "40982": "TC-JYF", "40983": "TC-JYG", "40984": "TC-JYH", "40985": "TC-JYI", "40986": "TC-JYJ", "42010": "TC-JYL", "42011": "TC-JYM", "42012": "TC-JYN", "42013": "TC-JYO", "42014": "TC-JYP"};   // MSN -> kuyruk kodu (filo.csv; yalnızca tek uçağa ait kodlar). Toolbox'ta tescil henüz güncellenmemiş uçaklar için öncelikli; ikinci el/eski tescil çakışması olanlarda Toolbox'taki güncel tescil kullanılır
   const FLEET_MSN = [29765, 29766, 29767, 29768, 29769, 29770, 29771, 29772, 29773, 29774, 29775, 29776, 29777, 29778, 29779, 29780, 29781, 29783, 29784, 29785, 29787, 29789, 29790, 34406, 34995, 40319, 34999, 34996, 40316, 39027, 34415, 34416, 34417, 34418, 34419, 35738, 35739, 35740, 35741, 35742, 35743, 35744, 35745, 39029, 39026, 40975, 40976, 30296, 40980, 40981, 40987, 42000, 40989, 40991, 42001, 42002, 40992, 42003, 42004, 40988, 40990, 42005, 42007, 42006, 42008, 42009, 60012, 60013, 60015, 60014, 60017, 60016, 60018, 60031, 60019, 60030, 60021, 60020, 60022, 60023, 60024, 60025, 60027, 60026, 60028, 60029, 41805, 41808, 39030, 39031, 39032, 60176, 32736, 34300, 32419, 32420, 40973, 40974, 40977, 40978, 40979, 40982, 40983, 40984, 40985, 40986, 42010, 42011, 42012, 42013, 42014];  // filo dosyasındaki 737 NG (CFM56) MSN'leri; MAX (LEAP-1B) ayrı belgedir
   const CHAPTERS = 'ALL';     // örn. ['25','52'] ya da tümü için 'ALL'
-  const MAX_CONC = 16;        // otomatik hızlanmanın üst sınırı (sunucu sorunsuzsa 2'şer artırır, hata görürse yarıya indirir)
+  const MAX_CONC = 24;        // eşzamanlı istek üst sınırı (sunucu sorunsuzsa 4'er artırır; yalnızca 429/503 gelirse yarıya indirir, 504 zaman aşımı hızı düşürmez)
   const CONCURRENCY = 6;      // başlangıçtaki eşzamanlı istek sayısı
   const SKIP_NOFLEET = true;  // true: filomuzdaki hiçbir uçağa uygulanmayan figürleri atlar
   const SAVE_ONLY_CMM = true; // true: dosyaya yalnızca CMM'i olan satırları yazar
@@ -50,10 +50,10 @@
   };
 
   // ---- istek katmanı: 404 -> {notFound}; 429/5xx/ağ hatası -> bekleyip yeniden dener ----
-  let nReq = 0, nErr = 0, pauseUntil = 0, lastSlow = 0, consecFail = 0, limit = CONCURRENCY, lastDown = 0, errMark = 0, lastStatus = 0;
+  let slow504 = 0, nReq = 0, nErr = 0, pauseUntil = 0, lastSlow = 0, consecFail = 0, limit = CONCURRENCY, lastDown = 0, errMark = 0, lastStatus = 0;
   window.__stop = false;
   const call = async (url) => {
-    for (let k = 0; k < 5; k++) {
+    for (let k = 0; k < 6; k++) {
       if (window.__stop) return null;
       const w = pauseUntil - Date.now(); if (w > 0) await sleep(w);
       try {
@@ -64,36 +64,39 @@
         if (r.status === 404) { consecFail = 0; return {notFound: true}; }
         if (r.status === 429 || r.status >= 500) {
           const ra = +r.headers.get('retry-after') || 0;
-          if (Date.now() - lastSlow > 3000) { lastSlow = Date.now(); lastDown = lastSlow; limit = Math.max(3, Math.floor(limit / 2)); pauseUntil = Math.max(pauseUntil, Date.now() + Math.max(ra * 1000, 1500)); }
+          if ((r.status === 429 || r.status === 503) && Date.now() - lastSlow > 3000) { lastSlow = Date.now(); lastDown = lastSlow; limit = Math.max(4, Math.floor(limit / 2)); pauseUntil = Math.max(pauseUntil, Date.now() + Math.max(ra * 1000, 1500)); }
+          if (r.status >= 500 && r.status !== 503) slow504++;               // 500/502/504: tek bir dosyanın zaman aşımı; genel hızı düşürmez, yalnızca o istek yeniden denenir
           throw new Error(r.status);
         }
         if (!r.ok) throw new Error(r.status);
         const j = JSON.parse(await r.text());                      // oturum düşmüşse HTML döner -> burada hata verir
         consecFail = 0; return j;
-      } catch (e) { nErr++; await sleep(400 * (k + 1)); }
+      } catch (e) { nErr++; await sleep((lastStatus >= 500 ? 1500 : 400) * (k + 1)); }
     }
     if (++consecFail >= 25) { window.__stop = true; console.error('Art arda çok hata (son durum: ' + lastStatus + '): oturum süresi dolmuş olabilir. Sayfayı yenileyip (gerekirse tekrar giriş yapıp) kodu yeniden çalıştırın; kaldığı yerden devam eder.'); }
     return null;
   };
-  let lastLog = 0, phase = '', total = 0, done = 0;
+  let lastLog = 0, phase = '', total = 0, done = 0, poolT0 = Date.now(), pump = () => {};
   const t0 = Date.now();
   const report = () => {
     if (Date.now() - lastLog < 5000) return; lastLog = Date.now();
-    if (nErr === errMark && Date.now() - lastDown > 10000 && limit < MAX_CONC) limit = Math.min(MAX_CONC, limit + 2); errMark = nErr;
-    band.textContent = `${TYPE} IPC · ${phase}: ${done}/${total} (durdurmak için konsola  window.__stop = true)`;
-    console.log(`${phase}: ${done}/${total} · istek ${nReq} (${(nReq / ((Date.now() - t0) / 1000)).toFixed(1)}/sn) · hata ${nErr} · paralel ${limit}`);
+    if (Date.now() - lastDown > 8000 && limit < MAX_CONC) limit = Math.min(MAX_CONC, limit + 4);
+    const el = (Date.now() - poolT0) / 1000, eta = done > 20 && el > 10 ? Math.round((total - done) / (done / el) / 60) : null;
+    band.textContent = `${TYPE} IPC · ${phase}: ${done}/${total}${eta != null ? ' · kalan ≈ ' + eta + ' dk' : ''} (durdurmak için konsola  window.__stop = true)`;
+    console.log(`${phase}: ${done}/${total}${eta != null ? ' · kalan ≈ ' + eta + ' dk' : ''} · istek ${nReq} (${(nReq / ((Date.now() - t0) / 1000)).toFixed(1)}/sn) · hata ${nErr} (504: ${slow504}) · paralel ${limit}`);
   };
-  const runPool = async (items, fn) => {
-    let i = 0; done = 0; total = items.length;
-    const worker = async id => {
-      while (!window.__stop) {
-        if (i >= items.length) return;
-        if (id >= limit) { await sleep(250); continue; }
-        const k = i++; if (k >= items.length) return;
-        await fn(items[k], k); done++; report();
-      }
-    };
-    await Promise.all(Array.from({length: MAX_CONC}, (_, id) => worker(id)));
+  const runPool = async (items, fn) => {                          // zamanlayıcıya (setTimeout) bağlı değil: sekme arka plandayken de hız düşmez
+    let i = 0, active = 0; done = 0; total = items.length; poolT0 = Date.now(); lastLog = 0;
+    await new Promise(resolve => {
+      pump = () => {
+        while (!window.__stop && active < limit && i < items.length) {
+          const k = i++; active++;
+          Promise.resolve().then(() => fn(items[k], k)).catch(e => console.error(e)).then(() => { active--; done++; report(); pump(); });
+        }
+        if (active === 0 && (i >= items.length || window.__stop)) resolve();
+      };
+      pump();
+    });
   };
   const fail = msg => { band.textContent = '✖ ' + msg; console.error(msg); };
 
@@ -250,6 +253,13 @@
   const res = new Map(), figFail = [];
   phase = 'figürler';
   await runPool(figs, doFig);
+  for (let round = 1; round <= 3 && figFail.length && !window.__stop; round++) {     // alınamayan figürleri 3 tura kadar otomatik yeniden dene
+    console.warn(`${figFail.length} figür alınamadı (sunucu zaman aşımı); ${20 * round} sn sonra yeniden denenecek (${round}/3)`);
+    await sleep(20000 * round);
+    const again = new Set(figFail.splice(0));
+    phase = `eksik figürler (${round}. tekrar)`;
+    await runPool(figs.filter(n => again.has(n.key)), doFig);
+  }
   if (window.__stop) return fail('Durduruldu. Aynı kodu tekrar çalıştırırsanız kaldığı yerden devam eder.');
   const unres = [...res.values()].reduce((s, r) => s + (r.unres || 0), 0);
   if (!ALLOW_PARTIAL && (figFail.length || tocFail.length)) {
