@@ -48,7 +48,7 @@
         #chSel { flex: 0 0 250px; width: 250px; }
         #secSel { flex: 0 0 270px; width: 270px; }
         #inputWrap { position: relative; width: 100%; }
-        #clearBtn { position: absolute; right: 2px; top: 2px; width: 44px; height: 44px; font-size: 26px; line-height: 1; color: #cbd5e1; background: transparent; border: 0; cursor: pointer; }
+        #clearBtn { position: absolute; right: 2px; top: 0; bottom: 0; width: 44px; display: flex; align-items: center; justify-content: center; padding: 0 0 5px; font-size: 26px; line-height: 1; color: #cbd5e1; background: transparent; border: 0; cursor: pointer; }
         #clearBtn:hover { color: #ffffff; }
 
         #searchSection.hero { flex: 1 1 auto; display: flex; align-items: center; justify-content: center; min-height: 0; overflow-y: auto; }
@@ -187,7 +187,7 @@
                 <strong id="chTitle" class="text-sm sm:text-base text-red-400 mr-1"></strong>
                 <select id="chSel" class="fld" aria-label="Chapter"></select>
                 <select id="secSel" class="fld" aria-label="Bölüm"></select>
-                <input type="text" id="kwInput" class="fld" placeholder="Bu listede ara (P/N, lokasyon...)" autocomplete="off" spellcheck="false" aria-label="Listede ara" style="flex: 1 1 180px; max-width: 320px;">
+                <input type="text" id="kwInput" class="fld" placeholder="Bu listede ara (lokasyon, P/N, CMM...)" autocomplete="off" spellcheck="false" aria-label="Listede ara" style="flex: 1 1 180px; max-width: 320px;">
                 <span class="text-xs sm:text-sm text-gray-300 ml-auto" aria-live="polite"><strong id="resultCount" class="text-red-400 text-base">0</strong> sonuç</span>
             </div>
             <div id="tableContainer" class="table-wrap flex-grow flex flex-col min-h-0 rounded-2xl shadow-xl overflow-hidden">
@@ -286,6 +286,7 @@
             res.filter(x => !x.err).forEach(x => {
                 const d = x.d, ds = { file: x.f, meta: d.meta, fleet: d.fleet, figs: d.figs, rows: d.rows, effs: d.effs || [], cmmSup: d.cmmSup || {} };
                 if (EK[ds.meta.type]) applyEk(ds, EK[ds.meta.type]);
+                ds.lav = (EK._lav || {})[ds.meta.type] || null;   // A330: lavabo konum kodları (veri_ek_uret.py)
                 S.sets.push(ds);
                 d.fleet.forEach((a, i) => S.aircraft.push({ reg: a.reg, key: nk(a.reg), fsn: a.fsn, msn: a.msn, eng: a.eng, ds, idx: i }));
             });
@@ -346,14 +347,14 @@
             showChapters();
             if (!keepCh) syncUrl();
         }
-        function resetAc() {
+        function resetAc(keep) {
             S.ac = null; S.ch = null;
-            $('searchInput').value = ''; $('clearBtn').hidden = true;
+            if (!keep) { $('searchInput').value = ''; $('clearBtn').hidden = true; }
             $('searchSection').classList.add('hero');
             $('heroText').hidden = false; $('status').hidden = false; $('acBar').hidden = true;
             $('chapterView').hidden = true; $('resultView').hidden = true;
             loadRecent(); renderRecent(); syncUrl(); suggest();
-            $('searchInput').focus();
+            if (!keep) $('searchInput').focus();
         }
         function loadRecent() {
             try { const r = JSON.parse(lsGet(RECENT_KEY) || '[]'); S.recent = Array.isArray(r) ? r.filter(x => typeof x === 'string' && x.length <= 12).slice(0, 4) : []; } catch (e) { S.recent = []; }
@@ -382,6 +383,13 @@
             const m = /(?:^|[\s,])(\d[A-Z]-(?:\d[A-Z]|[A-Z]{2}))\s+LAV\b/i.exec(figName || '');
             return m ? nom + ' (' + m[1].toUpperCase() + ')' : nom;
         }
+        // A330: "LAVATORY H ASSY" -> "LAVATORY H ASSY (L36)": kod veri.csv'den P/N ile (yoksa harf tek kodluysa harfle) bulunur
+        function lavA330(nom, pn, lav) {
+            const m = lav && /^LAVATORY\s+([A-Z]{1,2})\b(?!.*\()/i.exec(nom);
+            if (!m) return nom;
+            const c = lav.pn[String(pn).toUpperCase().replace(/[^A-Z0-9]/g, '')] || lav.let[m[1].toUpperCase()];
+            return c ? nom + ' (' + c + ')' : nom;
+        }
         function buildBase() {
             const a = S.ac, ds = a.ds, figOk = ds.figs.map(f => inSet(f.fm, a.idx));
             const effOk = (ds.effs || []).map(t => fsnOk(t, +a.fsn));
@@ -409,10 +417,10 @@
                     if (r[5] && !hit.fins.includes(r[5])) hit.fins.push(r[5]);
                     hit.n++; continue;
                 }
-                const o = { ch: f.ch, sec: f.ref.slice(0, 5), pn: r[2], vendor: r[3], nom: lavName(r[4] || f.name, f.name), fin: r[5], fins: r[5] ? [r[5]] : [], cmm: r[8] ? r[8].split(',') : [], refs: [f], fig: f, item: r[1], n: 1, eff: (ds.effs && r[9] !== '' && r[9] != null) ? ds.effs[r[9]] : '' };
+                const o = { ch: f.ch, sec: f.ref.slice(0, 5), pn: r[2], vendor: r[3], nom: lavA330(lavName(r[4] || f.name, f.name), r[2], ds.lav), fin: r[5], fins: r[5] ? [r[5]] : [], cmm: r[8] ? r[8].split(',') : [], refs: [f], fig: f, item: r[1], n: 1, eff: (ds.effs && r[9] !== '' && r[9] != null) ? ds.effs[r[9]] : '' };
                 seen.set(key, o); out.push(o);
             }
-            out.forEach(o => { o.search = norm([o.pn, o.vendor, o.nom, o.fins.join(' '), o.cmm.map(fmtCmm).join(' '), o.fig.ref, o.fig.name].join(' ')); });
+            out.forEach(o => { o.search = norm([o.pn, o.vendor, o.nom, o.fins.join(' '), o.cmm.map(fmtCmm).join(' ')].join(' ')); });
             S.base = out.filter(o => o.cmm.length);   // yalnızca CMM'i olan parçalar listelenir
         }
 
@@ -524,7 +532,7 @@
         }
 
         // ---------- Olaylar ----------
-        $('searchInput').addEventListener('input', suggest);
+        $('searchInput').addEventListener('input', () => { if (S.ac) { resetAc(true); return; } suggest(); });   // sonuç ekranındayken metin değişirse ilk ekrana dön
         $('searchInput').addEventListener('keydown', e => {
             if (e.key !== 'Enter' || S.ac) return;
             const h = findMatches($('searchInput').value); if (h.length) selectAc(h[0]);
@@ -544,6 +552,7 @@
         $('moreBtn').addEventListener('click', () => renderMore(false));
 
         loadAll();
+        if ('serviceWorker' in navigator) window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js').catch(() => {}); });
     </script>
 </body>
 </html>
