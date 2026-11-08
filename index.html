@@ -384,10 +384,10 @@
             return m ? nom + ' (' + m[1].toUpperCase() + ')' : nom;
         }
         // A330: "LAVATORY H ASSY" -> "LAVATORY H ASSY (L36)": kod veri.csv'den P/N ile (yoksa harf tek kodluysa harfle) bulunur
-        function lavA330(nom, pn, lav) {
+        function lavA330(nom, pn, lav, cmms) {
             const m = lav && /^LAVATORY\s+([A-Z]{1,2})\b(?!.*\()/i.exec(nom);
             if (!m) return nom;
-            const c = lav.pn[String(pn).toUpperCase().replace(/[^A-Z0-9]/g, '')] || lav.let[m[1].toUpperCase()];
+            const L = m[1].toUpperCase(), c = lav.pn[String(pn).toUpperCase().replace(/[^A-Z0-9]/g, '')] || lav.let[L] || (cmms || []).map(x => lav.lc && lav.lc[L + '|' + x]).find(Boolean);
             return c ? nom + ' (' + c + ')' : nom;
         }
         function buildBase() {
@@ -417,7 +417,7 @@
                     if (r[5] && !hit.fins.includes(r[5])) hit.fins.push(r[5]);
                     hit.n++; continue;
                 }
-                const o = { ch: f.ch, sec: f.ref.slice(0, 5), pn: r[2], vendor: r[3], nom: lavA330(lavName(r[4] || f.name, f.name), r[2], ds.lav), fin: r[5], fins: r[5] ? [r[5]] : [], cmm: r[8] ? r[8].split(',') : [], refs: [f], fig: f, item: r[1], n: 1, eff: (ds.effs && r[9] !== '' && r[9] != null) ? ds.effs[r[9]] : '' };
+                const o = { ch: f.ch, sec: f.ref.slice(0, 5), pn: r[2], vendor: r[3], nom: lavA330(lavName(r[4] || f.name, f.name), r[2], ds.lav, r[8] ? r[8].split(',') : []), fin: r[5], fins: r[5] ? [r[5]] : [], cmm: r[8] ? r[8].split(',') : [], refs: [f], fig: f, item: r[1], n: 1, eff: (ds.effs && r[9] !== '' && r[9] != null) ? ds.effs[r[9]] : '' };
                 seen.set(key, o); out.push(o);
             }
             out.forEach(o => { o.search = norm([o.pn, o.vendor, o.nom, o.fins.join(' '), o.cmm.map(fmtCmm).join(' ')].join(' ')); });
